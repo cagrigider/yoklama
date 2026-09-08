@@ -46,6 +46,22 @@ const SETTINGS_COPY = {
   saved: "Ayarlar kaydedildi",
 };
 
+const IMPORT_COPY = {
+  title: "Kişi listesi aktar",
+  hint: "Excel (basit ilk sayfa), CSV veya people.json. Zorunlu: sicil veya id, ve ad. İsteğe bağlı: pozisyon, yetkinlik. E-posta varsa kaydedilir.",
+  optional: "İsteğe bağlı — boş bırakabilirsin.",
+  pick: "Dosya seç",
+  import: "Aktar",
+  ok: "Kişiler aktarıldı",
+  missing: "Dosyadaki her satırda sicil ve ad olmalı. Hiçbir kişi güncellenmedi.",
+  exotic: "Bu Excel dosyası okunamadı (makro, birden fazla başlık satırı veya şifre). CSV olarak kaydedip tekrar dene.",
+  unsupported: "Desteklenen dosyalar: Excel (xlsx), CSV veya people.json.",
+  invalid: "Dosya okunamadı. CSV, JSON veya basit bir Excel sayfası dene.",
+  missingBody: "Dosya adı ve içerik gerekli.",
+  failed: "Aktarım başarısız.",
+  empty: "Önce bir dosya seç.",
+};
+
 const PEOPLE_COPY = {
   title: "Kişiler",
   sub: "Yönetici “geldi mi, aktif miydi?” diye sorunca buradan bak.",
@@ -108,7 +124,7 @@ async function api(path, options = {}) {
   });
   const data = await res.json().catch(() => ({ error: res.statusText }));
   if (!res.ok) {
-    const err = new Error(data.error || "İstek başarısız");
+    const err = new Error(data.message || data.error || "İstek başarısız");
     err.status = res.status;
     err.code = data.error;
     throw err;
@@ -221,6 +237,49 @@ function wizardErrorText(err) {
   return err.message;
 }
 
+function bytesToBase64(bytes) {
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function rosterFilePayload(file) {
+  const filename = file.name || "roster";
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".xlsm") || lower.endsWith(".xlsb")) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return { filename, contentBase64: bytesToBase64(bytes) };
+  }
+  return { filename, text: await file.text() };
+}
+
+async function postRosterImport(file) {
+  const payload = await rosterFilePayload(file);
+  return api("/api/people/import", { method: "POST", body: JSON.stringify(payload) });
+}
+
+function importErrorText(err) {
+  if (err.code === "missing_id_or_name") return IMPORT_COPY.missing;
+  if (err.code === "exotic_xlsx") return IMPORT_COPY.exotic;
+  if (err.code === "unsupported_type") return IMPORT_COPY.unsupported;
+  if (err.code === "invalid_file") return IMPORT_COPY.invalid;
+  if (err.code === "missing_body") return IMPORT_COPY.missingBody;
+  return err.message || IMPORT_COPY.failed;
+}
+
+function rosterFileFieldHtml(inputId, { optional = false } = {}) {
+  const hint = optional ? `${IMPORT_COPY.optional} ${IMPORT_COPY.hint}` : IMPORT_COPY.hint;
+  return `
+      <div class="field">
+        <span class="field-label">${IMPORT_COPY.title}</span>
+        <span class="field-hint">${escapeHtml(hint)}</span>
+        <input type="file" id="${escapeHtml(inputId)}" accept=".xlsx,.csv,.json,.xls,.xlsm" />
+      </div>`;
+}
+
 function wizardRepeatButtons(selected) {
   return WIZARD_REPEATS.map(
     (opt) =>
@@ -286,22 +345,37 @@ function bindSeriesForm(form, { errorId, onSaved }) {
     const payload = { name, firstDate, endDate: repeatRule === "none" ? null : endDate, repeatRule };
     try {
       await api("/api/profile", { method: "PUT", body: JSON.stringify(payload) });
-      await onSaved();
+      await onSaved({ showError });
     } catch (err) {
       showError(wizardErrorText(err));
     }
   });
 }
 
+async function goToMeetingsAfterWizard() {
+  if (location.hash === "#/" || location.hash === "" || location.hash === "#") {
+    await route();
+  } else {
+    location.hash = "#/";
+  }
+}
+
 function bindWizardForm(form) {
   bindSeriesForm(form, {
     errorId: "wizard-error",
-    onSaved: async () => {
-      if (location.hash === "#/" || location.hash === "" || location.hash === "#") {
-        await route();
-      } else {
-        location.hash = "#/";
+    onSaved: async ({ showError }) => {
+      const input = form.querySelector("#wizard-roster-file");
+      const file = input && input.files && input.files[0];
+      if (file) {
+        try {
+          await postRosterImport(file);
+          toast(IMPORT_COPY.ok);
+        } catch (err) {
+          showError(importErrorText(err));
+          return;
+        }
       }
+      await goToMeetingsAfterWizard();
     },
   });
 }
@@ -316,6 +390,7 @@ async function renderWizard() {
     </div>
     <form class="add-card person-form wizard-card" id="wizard-form" novalidate>
       ${seriesFieldsHtml({ errorId: "wizard-error", endWrapId: "wizard-end-wrap" })}
+      ${rosterFileFieldHtml("wizard-roster-file", { optional: true })}
       <div class="modal-actions">
         <button class="btn primary" type="submit">${WIZARD_COPY.save}</button>
       </div>
@@ -331,6 +406,38 @@ function bindSettingsForm(form) {
       toast(SETTINGS_COPY.saved);
       await route();
     },
+  });
+}
+
+function fillSettingsImport(host) {
+  host.innerHTML = `
+    <strong>${IMPORT_COPY.title}</strong>
+    <p class="sub">${IMPORT_COPY.hint}</p>
+    ${rosterFileFieldHtml("settings-roster-file")}
+    <p class="form-error" id="settings-import-error" hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn primary" id="settings-import-btn">${IMPORT_COPY.import}</button>
+    </div>
+  `;
+  const errorEl = host.querySelector("#settings-import-error");
+  const showError = (text) => {
+    errorEl.hidden = !text;
+    errorEl.textContent = text || "";
+  };
+  host.querySelector("#settings-import-btn").addEventListener("click", async () => {
+    const input = host.querySelector("#settings-roster-file");
+    const file = input && input.files && input.files[0];
+    if (!file) {
+      showError(IMPORT_COPY.empty);
+      return;
+    }
+    try {
+      await postRosterImport(file);
+      showError("");
+      toast(IMPORT_COPY.ok);
+    } catch (err) {
+      showError(importErrorText(err));
+    }
   });
 }
 
@@ -360,6 +467,7 @@ async function renderSettings() {
     <div id="settings-import"></div>
   `;
   bindSettingsForm($app.querySelector("#settings-form"));
+  fillSettingsImport($app.querySelector("#settings-import"));
 }
 
 async function renderMeetings() {

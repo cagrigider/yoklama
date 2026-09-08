@@ -646,6 +646,32 @@ a {
   display: none;
 }
 
+#settings-import {
+  max-width: 480px;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+#settings-import strong {
+  font-family: Fraunces, Georgia, serif;
+  font-size: 20px;
+}
+
+#settings-import .sub {
+  margin: 0;
+}
+
+#settings-import input[type="file"],
+.wizard-card input[type="file"] {
+  font: inherit;
+  width: 100%;
+}
+
 .wizard-card[hidden],
 .wizard-card [hidden] {
   display: none;

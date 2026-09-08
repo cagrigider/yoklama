@@ -3,12 +3,18 @@
 
 from __future__ import annotations
 
+import base64
+import csv
+import io
 import json
+import re
 import sqlite3
+import zipfile
 from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -40,6 +46,25 @@ REPEAT_RULES = ("none", "weekly", "biweekly", "monthly")
 SERIES_TITLE = "Toplantı"
 PROFILE_ID = 1
 DEFAULT_GROUP_NAME = "Yoklama"
+SICIL_FLOAT_RE = re.compile(r"^-?\d+\.0+$")
+XLSX_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+IMPORT_MSG = {
+    "missing_id_or_name": (
+        "Dosyadaki her satırda sicil (veya id) ve ad olmalı. Hiçbir kişi güncellenmedi."
+    ),
+    "exotic_xlsx": (
+        "Bu Excel dosyası okunamadı (makro, birden fazla başlık satırı veya şifre). "
+        "CSV olarak kaydedip tekrar dene."
+    ),
+    "unsupported_type": "Desteklenen dosyalar: Excel (xlsx), CSV veya people.json.",
+    "invalid_file": "Dosya okunamadı. CSV, JSON veya basit bir Excel sayfası dene.",
+    "missing_body": "Dosya adı ve içerik (text veya contentBase64) gerekli.",
+}
+ID_HEADERS = frozenset({"id", "sicil"})
+NAME_HEADERS = frozenset({"name", "ad", "isim"})
+POSITION_HEADERS = frozenset({"position", "pozisyon"})
+CENTER_HEADERS = frozenset({"center", "yetkinlik"})
+EMAIL_HEADERS = frozenset({"email", "e-posta", "eposta", "e_posta"})
 
 
 class SeriesError(ValueError):
@@ -48,6 +73,15 @@ class SeriesError(ValueError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+class RosterImportError(ValueError):
+    """Invalid roster file; import_people writes nothing."""
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.message = message or IMPORT_MSG.get(code, IMPORT_MSG["invalid_file"])
 
 
 def db() -> sqlite3.Connection:
@@ -561,6 +595,316 @@ def delete_person(conn: sqlite3.Connection, person_id: str) -> tuple[int, dict]:
     return 200, {"ok": True, "id": person_id}
 
 
+def coerce_sicil(value: object) -> str:
+    """Store numeric xlsx sicil as a string without a trailing .0."""
+    text = str(value if value is not None else "").strip()
+    if SICIL_FLOAT_RE.fullmatch(text):
+        return text.split(".", 1)[0]
+    return text
+
+
+def _norm_header(label: object) -> str:
+    return str(label or "").strip().casefold().replace(" ", "_")
+
+
+def header_field(label: object) -> str | None:
+    key = _norm_header(label)
+    if key in ID_HEADERS:
+        return "id"
+    if key in NAME_HEADERS:
+        return "name"
+    if key in POSITION_HEADERS:
+        return "position"
+    if key in CENTER_HEADERS:
+        return "center"
+    if key in EMAIL_HEADERS:
+        return "email"
+    return None
+
+
+def _empty_import_row(row: dict) -> bool:
+    return not any(str(row.get(k) or "").strip() for k in ("id", "name", "position", "center", "email"))
+
+
+def validate_import_rows(rows: list[dict]) -> list[dict]:
+    """Require sicil/id and name on every non-empty row before any write."""
+    cleaned: list[dict] = []
+    for row in rows:
+        if _empty_import_row(row):
+            continue
+        person_id = coerce_sicil(row.get("id"))
+        name = str(row.get("name") or "").strip()
+        if not person_id or not name:
+            raise RosterImportError("missing_id_or_name")
+        cleaned.append(
+            {
+                "id": person_id,
+                "name": name,
+                "position": str(row.get("position") or "").strip(),
+                "center": str(row.get("center") or "").strip(),
+                "email": str(row.get("email") or "").strip(),
+            }
+        )
+    by_id: dict[str, dict] = {}
+    for person in cleaned:
+        by_id[person["id"]] = person
+    return list(by_id.values())
+
+
+def upsert_imported_people(conn: sqlite3.Connection, people: list[dict]) -> None:
+    """Upsert by people.id. Does not delete absentees. Caller commits."""
+    conn.executemany(
+        """
+        INSERT INTO people (id, name, position, center, email)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            position = excluded.position,
+            center = excluded.center,
+            email = excluded.email
+        """,
+        [
+            (p["id"], p["name"], p["position"], p["center"], p["email"])
+            for p in people
+        ],
+    )
+
+
+def _row_from_mapped(mapped: dict) -> dict:
+    values = {"id": "", "name": "", "position": "", "center": "", "email": ""}
+    for raw_key, raw_val in mapped.items():
+        field = header_field(raw_key)
+        if not field:
+            continue
+        text = str(raw_val or "").strip()
+        if field == "id":
+            text = coerce_sicil(text)
+        if text and not values[field]:
+            values[field] = text
+    return values
+
+
+def parse_roster_csv(raw: bytes) -> list[dict]:
+    try:
+        text = raw.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            raise RosterImportError("invalid_file")
+        if not any(header_field(name) == "id" for name in reader.fieldnames) or not any(
+            header_field(name) == "name" for name in reader.fieldnames
+        ):
+            raise RosterImportError("invalid_file")
+        return [_row_from_mapped(row) for row in reader]
+    except (UnicodeDecodeError, csv.Error) as err:
+        raise RosterImportError("invalid_file") from err
+
+
+def parse_roster_json(raw: bytes) -> list[dict]:
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as err:
+        raise RosterImportError("invalid_file") from err
+    if not isinstance(data, list):
+        raise RosterImportError("invalid_file")
+    rows: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise RosterImportError("invalid_file")
+        mapped = dict(item)
+        if "sicil" in mapped and "id" not in mapped:
+            mapped["id"] = mapped.get("sicil")
+        if "yetkinlik" in mapped and "center" not in mapped:
+            mapped["center"] = mapped.get("yetkinlik")
+        rows.append(_row_from_mapped(mapped))
+    return rows
+
+
+def _xml_local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _col_index(cell_ref: str) -> int:
+    letters = "".join(ch for ch in cell_ref if ch.isalpha())
+    index = 0
+    for ch in letters.upper():
+        index = index * 26 + (ord(ch) - 64)
+    return max(index - 1, 0)
+
+
+def _xlsx_si_text(si: ET.Element) -> str:
+    direct = [c for c in list(si) if _xml_local(c.tag) == "t"]
+    if direct:
+        return "".join((t.text or "") for t in direct)
+    parts: list[str] = []
+    for child in si:
+        loc = _xml_local(child.tag)
+        if loc == "r":
+            for node in child:
+                if _xml_local(node.tag) == "t":
+                    parts.append(node.text or "")
+        elif loc == "t":
+            parts.append(child.text or "")
+    return "".join(parts)
+
+
+def _xlsx_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    try:
+        root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+    except KeyError:
+        return []
+    return [_xlsx_si_text(si) for si in root if _xml_local(si.tag) == "si"]
+
+
+def _xlsx_cell_text(cell: ET.Element, shared: list[str]) -> str:
+    cell_type = cell.get("t")
+    if cell_type == "inlineStr":
+        return "".join(
+            (el.text or "") for el in cell.iter() if _xml_local(el.tag) == "t"
+        ).strip()
+    value = ""
+    for child in cell:
+        if _xml_local(child.tag) == "v":
+            value = (child.text or "").strip()
+            break
+    if cell_type == "s":
+        try:
+            return shared[int(value)].strip()
+        except (ValueError, IndexError):
+            return value
+    return coerce_sicil(value) if value else ""
+
+
+def _xlsx_first_sheet_xml(zf: zipfile.ZipFile) -> bytes:
+    try:
+        workbook = ET.fromstring(zf.read("xl/workbook.xml"))
+    except KeyError as err:
+        raise RosterImportError("exotic_xlsx") from err
+    sheets = [el for el in workbook.iter() if _xml_local(el.tag) == "sheet"]
+    if not sheets:
+        raise RosterImportError("exotic_xlsx")
+    rid = sheets[0].get(f"{{{XLSX_REL_NS}}}id") or sheets[0].get("r:id")
+    try:
+        rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+    except KeyError as err:
+        raise RosterImportError("exotic_xlsx") from err
+    target = None
+    for rel in rels.iter():
+        if _xml_local(rel.tag) == "Relationship" and rel.get("Id") == rid:
+            target = (rel.get("Target") or "").replace("\\", "/")
+            break
+    if not target:
+        raise RosterImportError("exotic_xlsx")
+    if target.startswith("/"):
+        target = target.lstrip("/")
+    elif not target.startswith("xl/"):
+        target = f"xl/{target}"
+    try:
+        return zf.read(target)
+    except KeyError as err:
+        raise RosterImportError("exotic_xlsx") from err
+
+
+def parse_roster_xlsx(raw: bytes) -> list[dict]:
+    """First worksheet only. Macros, extra header rows, and encrypted books fail closed."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile as err:
+        raise RosterImportError("exotic_xlsx") from err
+    names = zf.namelist()
+    if any(name.endswith("EncryptedPackage") or name.endswith("EncryptionInfo") for name in names):
+        raise RosterImportError("exotic_xlsx")
+    if any(name.endswith("vbaProject.bin") for name in names):
+        raise RosterImportError("exotic_xlsx")
+    try:
+        shared = _xlsx_shared_strings(zf)
+        sheet = ET.fromstring(_xlsx_first_sheet_xml(zf))
+    except ET.ParseError as err:
+        raise RosterImportError("exotic_xlsx") from err
+    grid: dict[int, dict[int, str]] = {}
+    for row_el in sheet.iter():
+        if _xml_local(row_el.tag) != "row":
+            continue
+        try:
+            row_num = int(row_el.get("r") or 0)
+        except ValueError:
+            continue
+        cells: dict[int, str] = {}
+        for cell in row_el:
+            if _xml_local(cell.tag) != "c":
+                continue
+            cells[_col_index(cell.get("r") or "")] = _xlsx_cell_text(cell, shared)
+        if row_num:
+            grid[row_num] = cells
+    if not grid:
+        return []
+    max_col = 0
+    for cells in grid.values():
+        if cells:
+            max_col = max(max_col, max(cells))
+    first_r = min(grid)
+    headers = [grid[first_r].get(i, "").strip() for i in range(max_col + 1)]
+    fields = [header_field(h) for h in headers]
+    if "id" not in fields or "name" not in fields:
+        raise RosterImportError("exotic_xlsx")
+    extra_header = False
+    for row_num in sorted(grid):
+        if row_num == first_r:
+            continue
+        later = [grid[row_num].get(i, "").strip() for i in range(max_col + 1)]
+        later_fields = [header_field(h) for h in later]
+        if "id" in later_fields and "name" in later_fields:
+            extra_header = True
+            break
+    if extra_header:
+        raise RosterImportError("exotic_xlsx")
+    rows: list[dict] = []
+    for row_num in sorted(n for n in grid if n > first_r):
+        mapped = {headers[i]: grid[row_num].get(i, "") for i in range(len(headers))}
+        rows.append(_row_from_mapped(mapped))
+    return rows
+
+
+def parse_roster(filename: str, raw: bytes) -> list[dict]:
+    lower = filename.casefold()
+    if lower.endswith(".csv"):
+        return parse_roster_csv(raw)
+    if lower.endswith(".json"):
+        return parse_roster_json(raw)
+    if lower.endswith(".xlsx"):
+        return parse_roster_xlsx(raw)
+    if lower.endswith((".xls", ".xlsm", ".xlsb")):
+        raise RosterImportError("exotic_xlsx")
+    raise RosterImportError("unsupported_type")
+
+
+def import_people(conn: sqlite3.Connection, body: dict) -> tuple[int, dict]:
+    """POST /api/people/import — JSON {filename, text} or {filename, contentBase64}."""
+    filename = str(body.get("filename") or "").strip()
+    raw_b64 = body.get("contentBase64")
+    raw_text = body.get("text")
+    if not filename:
+        return 400, {"error": "missing_body", "message": IMPORT_MSG["missing_body"]}
+    raw: bytes
+    if isinstance(raw_b64, str) and raw_b64.strip():
+        try:
+            raw = base64.b64decode(raw_b64, validate=False)
+        except (ValueError, TypeError):
+            return 400, {"error": "invalid_file", "message": IMPORT_MSG["invalid_file"]}
+    elif raw_text is not None:
+        if not isinstance(raw_text, str):
+            return 400, {"error": "invalid_file", "message": IMPORT_MSG["invalid_file"]}
+        raw = raw_text.encode("utf-8")
+    else:
+        return 400, {"error": "missing_body", "message": IMPORT_MSG["missing_body"]}
+    try:
+        people = validate_import_rows(parse_roster(filename, raw))
+    except RosterImportError as err:
+        return 400, {"error": err.code, "message": err.message}
+    upsert_imported_people(conn, people)
+    conn.commit()
+    return 200, {"ok": True, "upserted": len(people)}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -730,6 +1074,17 @@ class Handler(BaseHTTPRequestHandler):
             # Profile + fill_gap_meetings commit together; import is a later, separate write.
             if method == "PUT" and path == "/api/profile":
                 self._put_profile(conn)
+                return
+
+            # POST /api/people/import — JSON {filename, text} or {filename, contentBase64}.
+            # Not multipart. People writes only; does not touch group_profile or meetings.
+            if method == "POST" and path == "/api/people/import":
+                body = read_json(self)
+                if not isinstance(body, dict):
+                    self.json(400, {"error": "invalid_json"})
+                    return
+                code, payload = import_people(conn, body)
+                self.json(code, payload)
                 return
 
             # POST /api/people — add; PUT/DELETE /api/people/{id} — id in path only.

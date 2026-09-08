@@ -21,6 +21,9 @@
 - Settings/header tasks: hunks in `bindPersonRow`, `renderLive`, or attendance PUT are CRITICAL (live tick must stay one-write-one-row)
 - Hash-router views must not `await` a second fetch after `route()`'s `viewSeq` check without re-checking `seq` (or `location.hash`) before writing `$app.innerHTML` — a stale Settings paint can clobber live tick (`#roster` missing, `stillHere()` no-ops)
 - ADR-0001 upgrade insert (`ensure_default_profile`) must not call `fill_gap_meetings`; `PUT /api/profile` persists `group_profile` + fill-gaps in one transaction and rolls back on `SeriesError`
+- Roster import: stdlib parsers only (no `openpyxl` / pip / `requirements.txt`); JSON `{filename, text|contentBase64}` not multipart. Decode/parse failures (`UnicodeDecodeError`, `csv.Error`) must be 400 with Turkish `message`, never an unhandled 500. Validate all rows before any people write; upsert by `id` with no DELETE of absentees; import must not write `group_profile` or meetings
+- SPA `api()` must expose JSON `message` (Turkish) on failed import/profile writes — `new Error(data.error)` shows raw codes (`unsupported_type`) to the champion
+- Import tests: exotic xlsx (macro / extra header / encrypted) → 400 `exotic_xlsx`; omitted optional columns must not silently blank existing email/position/center unless that is the documented contract
 
 ## Flags
 - Performance-critical: false
