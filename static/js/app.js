@@ -39,6 +39,13 @@ const WIZARD_REPEATS = [
   { value: "monthly", label: WIZARD_COPY.monthly },
 ];
 
+const SETTINGS_COPY = {
+  title: "Ayarlar",
+  sub: "Grup adı ve toplantı takvimini güncelle. Mevcut toplantılar ve yoklama işaretleri silinmez.",
+  save: "Kaydet",
+  saved: "Ayarlar kaydedildi",
+};
+
 const PEOPLE_COPY = {
   title: "Kişiler",
   sub: "Yönetici “geldi mi, aktif miydi?” diye sorunca buradan bak.",
@@ -159,11 +166,19 @@ function meetingEditorFields(m) {
 
 let viewSeq = 0;
 
+function applyGroupHeader(meta) {
+  const el = document.getElementById("group-name");
+  if (!el) return;
+  const name = (meta.groupName || "").trim();
+  el.textContent = name || "Yoklama";
+}
+
 function route() {
   const seq = ++viewSeq;
   return api("/api/meta")
     .then((meta) => {
       if (seq !== viewSeq) return;
+      applyGroupHeader(meta);
       if (!meta.configured) {
         document.querySelectorAll("[data-nav]").forEach((a) => a.classList.remove("active"));
         return renderWizard();
@@ -175,6 +190,7 @@ function route() {
         a.classList.toggle("active", (key === "home" && !parts.length) || parts[0] === key);
       });
       if (!parts.length) return renderMeetings();
+      if (parts[0] === "settings") return renderSettings();
       if (parts[0] === "people" && parts[1] === "new") return renderPersonForm();
       if (parts[0] === "people" && parts[1] && parts[2] === "edit") return renderPersonForm(parts[1]);
       if (parts[0] === "people" && parts[1]) return renderPerson(parts[1]);
@@ -212,30 +228,53 @@ function wizardRepeatButtons(selected) {
   ).join("");
 }
 
-function syncWizardRepeat(form, rule) {
+function seriesFieldsHtml({ name = "", firstDate = "", repeatRule = "none", endDate = "", errorId, endWrapId }) {
+  const rule = repeatRule || "none";
+  return `
+      ${personFormField({ name: "name", label: WIZARD_COPY.name, value: name, required: true })}
+      ${personFormField({ name: "firstDate", label: WIZARD_COPY.firstDate, type: "date", value: firstDate, required: true })}
+      <div class="field">
+        <span class="field-label">${WIZARD_COPY.repeat}</span>
+        <div class="seg">${wizardRepeatButtons(rule)}</div>
+        <input type="hidden" name="repeatRule" value="${escapeHtml(rule)}" />
+      </div>
+      <div id="${escapeHtml(endWrapId)}" data-end-wrap ${rule === "none" ? "hidden" : ""}>
+        ${personFormField({ name: "endDate", label: WIZARD_COPY.endDate, type: "date", value: endDate || "" })}
+      </div>
+      <p class="form-error" id="${escapeHtml(errorId)}" hidden></p>
+  `;
+}
+
+function syncSeriesRepeat(form, rule) {
   form.querySelector("[name=repeatRule]").value = rule;
-  form.querySelector("#wizard-end-wrap").hidden = rule === "none";
+  const wrap = form.querySelector("[data-end-wrap]");
+  if (wrap) wrap.hidden = rule === "none";
   form.querySelectorAll("[data-repeat]").forEach((btn) => {
     btn.dataset.on = btn.dataset.repeat === rule ? "true" : "false";
   });
 }
 
-function bindWizardForm(form) {
+function seriesPayloadFromForm(form) {
+  const data = Object.fromEntries(new FormData(form));
+  const name = (data.name || "").trim();
+  const firstDate = (data.firstDate || "").trim();
+  const repeatRule = data.repeatRule || "none";
+  const endDate = (data.endDate || "").trim() || null;
+  return { name, firstDate, repeatRule, endDate };
+}
+
+function bindSeriesForm(form, { errorId, onSaved }) {
   form.querySelectorAll("[data-repeat]").forEach((btn) => {
-    btn.addEventListener("click", () => syncWizardRepeat(form, btn.dataset.repeat));
+    btn.addEventListener("click", () => syncSeriesRepeat(form, btn.dataset.repeat));
   });
-  const errorEl = form.querySelector("#wizard-error");
+  const errorEl = form.querySelector(`#${errorId}`);
   const showError = (text) => {
     errorEl.hidden = !text;
     errorEl.textContent = text || "";
   };
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const data = Object.fromEntries(new FormData(form));
-    const name = (data.name || "").trim();
-    const firstDate = (data.firstDate || "").trim();
-    const repeatRule = data.repeatRule || "none";
-    const endDate = (data.endDate || "").trim() || null;
+    const { name, firstDate, repeatRule, endDate } = seriesPayloadFromForm(form);
     if (!name || !firstDate) {
       showError(WIZARD_COPY.required);
       return;
@@ -247,14 +286,23 @@ function bindWizardForm(form) {
     const payload = { name, firstDate, endDate: repeatRule === "none" ? null : endDate, repeatRule };
     try {
       await api("/api/profile", { method: "PUT", body: JSON.stringify(payload) });
+      await onSaved();
+    } catch (err) {
+      showError(wizardErrorText(err));
+    }
+  });
+}
+
+function bindWizardForm(form) {
+  bindSeriesForm(form, {
+    errorId: "wizard-error",
+    onSaved: async () => {
       if (location.hash === "#/" || location.hash === "" || location.hash === "#") {
         await route();
       } else {
         location.hash = "#/";
       }
-    } catch (err) {
-      showError(wizardErrorText(err));
-    }
+    },
   });
 }
 
@@ -267,17 +315,7 @@ async function renderWizard() {
       </div>
     </div>
     <form class="add-card person-form wizard-card" id="wizard-form" novalidate>
-      ${personFormField({ name: "name", label: WIZARD_COPY.name, required: true })}
-      ${personFormField({ name: "firstDate", label: WIZARD_COPY.firstDate, type: "date", required: true })}
-      <div class="field">
-        <span class="field-label">${WIZARD_COPY.repeat}</span>
-        <div class="seg">${wizardRepeatButtons("none")}</div>
-        <input type="hidden" name="repeatRule" value="none" />
-      </div>
-      <div id="wizard-end-wrap" hidden>
-        ${personFormField({ name: "endDate", label: WIZARD_COPY.endDate, type: "date" })}
-      </div>
-      <p class="form-error" id="wizard-error" hidden></p>
+      ${seriesFieldsHtml({ errorId: "wizard-error", endWrapId: "wizard-end-wrap" })}
       <div class="modal-actions">
         <button class="btn primary" type="submit">${WIZARD_COPY.save}</button>
       </div>
@@ -286,14 +324,53 @@ async function renderWizard() {
   bindWizardForm($app.querySelector("#wizard-form"));
 }
 
-async function renderMeetings() {
-  const [meetings, meta] = await Promise.all([api("/api/meetings"), api("/api/meta")]);
-  const today = meta.today;
+function bindSettingsForm(form) {
+  bindSeriesForm(form, {
+    errorId: "settings-error",
+    onSaved: async () => {
+      toast(SETTINGS_COPY.saved);
+      await route();
+    },
+  });
+}
+
+async function renderSettings() {
+  const meta = await api("/api/meta");
   $app.innerHTML = `
     <div class="top">
       <div>
-        <h2>Toplantılar</h2>
-        <p class="sub">Toplantı ekle; yoklamayı canlı işaretle. Veri bu makinede kalır.</p>
+        <h2>${SETTINGS_COPY.title}</h2>
+        <p class="sub">${SETTINGS_COPY.sub}</p>
+      </div>
+      <a class="btn ghost" href="#/people">${PEOPLE_COPY.title}</a>
+    </div>
+    <form class="add-card person-form wizard-card" id="settings-form" novalidate>
+      ${seriesFieldsHtml({
+        name: meta.groupName || "",
+        firstDate: meta.firstDate || "",
+        repeatRule: meta.repeatRule || "none",
+        endDate: meta.endDate || "",
+        errorId: "settings-error",
+        endWrapId: "settings-end-wrap",
+      })}
+      <div class="modal-actions">
+        <button class="btn primary" type="submit">${SETTINGS_COPY.save}</button>
+      </div>
+    </form>
+    <div id="settings-import"></div>
+  `;
+  bindSettingsForm($app.querySelector("#settings-form"));
+}
+
+async function renderMeetings() {
+  const [meetings, meta] = await Promise.all([api("/api/meetings"), api("/api/meta")]);
+  const today = meta.today;
+  const groupName = (meta.groupName || "").trim();
+  $app.innerHTML = `
+    <div class="top">
+      <div>
+        <h2 id="meeting-list-title">${escapeHtml(groupName || "Toplantılar")}</h2>
+        <p class="sub">${groupName ? "Toplantılar · " : ""}Toplantı ekle; yoklamayı canlı işaretle. Veri bu makinede kalır.</p>
       </div>
     </div>
     <section class="add-card">

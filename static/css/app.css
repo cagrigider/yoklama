@@ -642,6 +642,10 @@ a {
   max-width: 480px;
 }
 
+#settings-import:empty {
+  display: none;
+}
+
 .wizard-card[hidden],
 .wizard-card [hidden] {
   display: none;

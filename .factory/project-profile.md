@@ -33,3 +33,6 @@
 ## Learning History
 - 2026-09-08 — initialize-agent: first `.factory/` profiles from detection (Python 3 stdlib + static SPA + SQLite). Architect memory and `plans/` / `test-plans/` left untouched.
 - 2026-09-08 — unit-test-engineer: first suite is stdlib `unittest` under `tests/` (no pytest). Isolated temp SQLite via `tests/tempdb.py`; never `data/attendance.db`. Helpers under test: `fill_gap_meetings`, people write functions.
+- 2026-09-09 — unit-test-engineer: TASK-1.1.2 `group_profile` suite. IsolatedDbTestCase schema includes additive `group_profile` singleton. Prefer helpers (`profile_meta`, `ensure_default_profile`, `upsert_group_profile`); PUT/GET profile contract uses in-process `127.0.0.1:0` Handler. Synthetic seed JSON only when asserting `seed_people` does not skip the wizard.
+- 2026-09-09 — unit-test-engineer: TASK-1.2.1 Settings UI. No new Python — `tests/test_settings_ui.py` reads SPA sources and asserts `#settings-import` plus hash `#/settings`. PUT `/api/profile` and fill_gap stay in existing suites. No Playwright.
+- 2026-09-09 — unit-tester: full suite `python3 -m unittest discover -s tests -v` → 32 passed / 0 failed (2.308s). Isolated temp SQLite only; `data/attendance.db` unused. New vs prior report: `SettingsUiHostTest` (TASK-1.2.1).
