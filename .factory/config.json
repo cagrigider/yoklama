@@ -1,0 +1,18 @@
+{
+  "git": {
+    "provider": "github",
+    "remote": "origin",
+    "base_branch": "main",
+    "pull_request": { "create": true, "reviewers": [] },
+    "confirm": false
+  },
+  "resources": {
+    "github": {
+      "deployment": "cloud",
+      "owner": "cagrigider",
+      "default_repository": "yoklama",
+      "auth": { "method": "token", "token_env": "GITHUB_TOKEN" }
+    }
+  },
+  "retries": { "sprint_task": 3, "security": 1, "architect": 3, "web_ui": 3, "qa": 5 }
+}

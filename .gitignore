@@ -14,3 +14,8 @@ __pycache__/
 .DS_Store
 .env
 .env.*
+
+# adFactory secrets and scratch (keep .factory/.env.example tracked)
+.factory/.env
+!.factory/.env.example
+.factory-worktrees/
