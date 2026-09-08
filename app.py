@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -36,6 +36,16 @@ TAG_TR = {
     "camera": "kamera açık",
 }
 PRESENT = {"present", "quiet", "spoke", "strong"}
+REPEAT_RULES = ("none", "weekly", "biweekly", "monthly")
+SERIES_TITLE = "Toplantı"
+
+
+class SeriesError(ValueError):
+    """Invalid series bounds or rule; fill_gap_meetings writes nothing."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 def db() -> sqlite3.Connection:
@@ -100,6 +110,78 @@ def seed_people(conn: sqlite3.Connection) -> None:
 def seed_meetings(conn: sqlite3.Connection) -> None:
     # New installs start empty. Recurring series belong in setup/settings, not in git.
     return
+
+
+def _nth_weekday_in_month(year: int, month: int, weekday: int, ordinal: int) -> date | None:
+    """Return the ordinal occurrence of weekday in (year, month), or None if absent."""
+    first = date(year, month, 1)
+    day_num = 1 + (weekday - first.weekday()) % 7 + 7 * (ordinal - 1)
+    try:
+        found = date(year, month, day_num)
+    except ValueError:
+        return None
+    if found.month != month:
+        return None
+    return found
+
+
+def fill_gap_meetings(
+    conn: sqlite3.Connection,
+    first_date: date,
+    end_date: date | None,
+    repeat_rule: str,
+) -> list[date]:
+    """Generate series dates and insert kind=series meetings only where that ISO date is missing.
+
+    Wizard save and Settings save must call this function (calendar ``date`` only).
+    Never DELETE/UPDATE meetings or attendance. Does not commit; the caller commits.
+    """
+    if repeat_rule not in REPEAT_RULES:
+        raise SeriesError("invalid_repeat")
+    if end_date is not None and end_date < first_date:
+        raise SeriesError("end_before_first")
+    dates: list[date]
+    if repeat_rule == "none":
+        dates = [first_date]
+    elif end_date is None:
+        raise SeriesError("end_required")
+    elif repeat_rule == "monthly":
+        weekday = first_date.weekday()
+        ordinal = (first_date.day - 1) // 7 + 1
+        dates = []
+        year, month = first_date.year, first_date.month
+        end_year, end_month = end_date.year, end_date.month
+        while (year, month) <= (end_year, end_month):
+            day = _nth_weekday_in_month(year, month, weekday, ordinal)
+            if day is not None and first_date <= day <= end_date:
+                dates.append(day)
+            if month == 12:
+                year += 1
+                month = 1
+            else:
+                month += 1
+    else:
+        step = 7 if repeat_rule == "weekly" else 14
+        dates = []
+        day = first_date
+        while day <= end_date:
+            dates.append(day)
+            day += timedelta(days=step)
+    inserted: list[date] = []
+    for day in dates:
+        iso = day.isoformat()
+        exists = conn.execute(
+            "SELECT 1 FROM meetings WHERE date = ? LIMIT 1",
+            (iso,),
+        ).fetchone()
+        if exists:
+            continue
+        conn.execute(
+            "INSERT INTO meetings (title, date, kind, notes) VALUES (?, ?, 'series', '')",
+            (SERIES_TITLE, iso),
+        )
+        inserted.append(day)
+    return inserted
 
 
 def row_to_person(r: sqlite3.Row) -> dict:
@@ -319,6 +401,88 @@ def read_json(handler: BaseHTTPRequestHandler) -> dict:
     return json.loads(raw.decode("utf-8"))
 
 
+def people_write_id(path: str) -> str | None:
+    """Person id for PUT/DELETE /api/people/{id}. Id is path-only; not /import."""
+    parts = path.split("/")
+    if len(parts) != 4 or parts[1] != "api" or parts[2] != "people":
+        return None
+    person_id = parts[3]
+    if not person_id or person_id == "import":
+        return None
+    return person_id
+
+
+def person_id_from_body(body: dict) -> str:
+    raw = body.get("id", body.get("sicil"))
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def optional_person_field(body: dict, key: str, fallback: str = "") -> str:
+    if key not in body:
+        return fallback
+    value = body.get(key)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def insert_person(conn: sqlite3.Connection, body: dict) -> tuple[int, dict]:
+    """Insert a person. Returns (status, payload). Duplicate id is 409, not an upsert."""
+    person_id = person_id_from_body(body)
+    name = optional_person_field(body, "name")
+    if not person_id or not name:
+        return 400, {"error": "missing_id_or_name"}
+    existing = conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+    if existing is not None:
+        return 409, {"error": "duplicate_id"}
+    position = optional_person_field(body, "position")
+    center = optional_person_field(body, "center")
+    email = optional_person_field(body, "email")
+    try:
+        conn.execute(
+            "INSERT INTO people (id, name, position, center, email) VALUES (?, ?, ?, ?, ?)",
+            (person_id, name, position, center, email),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return 409, {"error": "duplicate_id"}
+    row = conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+    return 201, row_to_person(row)
+
+
+def update_person(conn: sqlite3.Connection, person_id: str, body: dict) -> tuple[int, dict]:
+    """Update name/position/center/email. Path id is immutable; body id is ignored."""
+    existing = conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+    if existing is None:
+        return 404, {"error": "not_found"}
+    name = optional_person_field(body, "name", existing["name"])
+    if not name:
+        return 400, {"error": "missing_id_or_name"}
+    position = optional_person_field(body, "position", existing["position"])
+    center = optional_person_field(body, "center", existing["center"])
+    email = optional_person_field(body, "email", existing["email"])
+    conn.execute(
+        "UPDATE people SET name = ?, position = ?, center = ?, email = ? WHERE id = ?",
+        (name, position, center, email, person_id),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+    return 200, row_to_person(row)
+
+
+def delete_person(conn: sqlite3.Connection, person_id: str) -> tuple[int, dict]:
+    """Delete a person; attendance rows cascade via FK."""
+    existing = conn.execute("SELECT id FROM people WHERE id = ?", (person_id,)).fetchone()
+    if existing is None:
+        return 404, {"error": "not_found"}
+    conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
+    conn.commit()
+    return 200, {"ok": True, "id": person_id}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -372,6 +536,37 @@ class Handler(BaseHTTPRequestHandler):
             ".ico": "image/x-icon",
         }
         self._send(200, target.read_bytes(), types.get(target.suffix, "application/octet-stream"))
+
+    def _put_profile(self, conn: sqlite3.Connection) -> None:
+        body = read_json(self)
+        first_raw = (body.get("firstDate") or "").strip()
+        try:
+            first = date.fromisoformat(first_raw)
+        except ValueError:
+            self.json(400, {"error": "invalid_date"})
+            return
+        end_raw = body.get("endDate")
+        end: date | None = None
+        if end_raw not in (None, ""):
+            try:
+                end = date.fromisoformat(str(end_raw).strip())
+            except ValueError:
+                self.json(400, {"error": "invalid_date"})
+                return
+        repeat_rule = (body.get("repeatRule") or "").strip()
+        try:
+            inserted = fill_gap_meetings(conn, first, end, repeat_rule)
+        except SeriesError as err:
+            self.json(400, {"error": err.code})
+            return
+        conn.commit()
+        self.json(
+            200,
+            {
+                "ok": True,
+                "inserted": [d.isoformat() for d in inserted],
+            },
+        )
 
     def handle_api_get(self, path: str, query: dict) -> None:
         conn = db()
@@ -441,6 +636,37 @@ class Handler(BaseHTTPRequestHandler):
     def handle_api_write(self, method: str, path: str) -> None:
         conn = db()
         try:
+            # PUT /api/profile — series fill-gaps (wizard/Settings persist profile in TASK-1.1.2)
+            if method == "PUT" and path == "/api/profile":
+                self._put_profile(conn)
+                return
+
+            # POST /api/people — add; PUT/DELETE /api/people/{id} — id in path only.
+            # Duplicate add is 409 (no silent overwrite). POST /api/people/import is not this family.
+            if method == "POST" and path == "/api/people":
+                body = read_json(self)
+                if not isinstance(body, dict):
+                    self.json(400, {"error": "invalid_json"})
+                    return
+                code, payload = insert_person(conn, body)
+                self.json(code, payload)
+                return
+
+            person_id = people_write_id(path)
+            if person_id and method == "PUT":
+                body = read_json(self)
+                if not isinstance(body, dict):
+                    self.json(400, {"error": "invalid_json"})
+                    return
+                code, payload = update_person(conn, person_id, body)
+                self.json(code, payload)
+                return
+
+            if person_id and method == "DELETE":
+                code, payload = delete_person(conn, person_id)
+                self.json(code, payload)
+                return
+
             if method == "POST" and path == "/api/meetings":
                 body = read_json(self)
                 title = (body.get("title") or "").strip() or "Toplantı"

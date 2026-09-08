@@ -15,6 +15,8 @@
 - Import all-or-nothing validation; person `id` (sicil) immutable after insert
 - Bind remains `127.0.0.1` (not `0.0.0.0`)
 - Do not introduce pip dependencies or `requirements.txt` for core paths
+- JSON write handlers: require a JSON object (`isinstance(body, dict)`) and respond 400 `invalid_json` otherwise — do not call `.get` on arrays or `null`
+- Unit tests isolate SQLite via temp files; never open, migrate, or wipe `data/attendance.db`
 
 ## Flags
 - Performance-critical: false

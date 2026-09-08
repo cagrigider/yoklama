@@ -7,7 +7,7 @@
 ## Commands
 - Build: `python3 -m py_compile app.py` (no compile/bundle step; syntax check only)
 - Run: `python3 app.py` — serves http://127.0.0.1:8765
-- Test: none yet. When added: `python3 -m pytest` or `python3 -m unittest discover`
+- Test: `python3 -m unittest discover -s tests -v` (stdlib unittest; no pytest)
 - Clean: `find . -type d -name __pycache__ -prune -exec rm -rf {} +` (never delete `data/attendance.db`)
 - Lint / format: TBD (no ruff/black/eslint in repo; stdlib only — do not add a formatter as a runtime dependency)
 

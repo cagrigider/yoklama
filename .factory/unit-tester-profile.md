@@ -5,14 +5,13 @@
 > Last updated: 2026-09-08
 
 ## Test Frameworks
-- None in the tree yet. When added: pytest (preferred) or unittest. Do not add a test runner as an app runtime dependency.
+- **unittest** (stdlib). Do not add pytest or any pip package.
 
 ## Coverage Targets
-- TBD (no suite yet)
+- TASK-1.1.1 fill-gaps + TASK-1.2.3 people CRUD helpers (see `tests/`)
 
 ## Run Conventions
-- There is no test command until a suite exists — report “no tests” rather than inventing a runner
-- When added: `python3 -m pytest` from the project root, or `python3 -m unittest discover`
-- Never point tests at the operator’s `data/attendance.db`; use an isolated temp tree or a documented `YOKLAMA_DATA_DIR` / temp DB
-- Parallelism: TBD (single-process SQLite — default serial)
+- From project root: `python3 -m unittest discover -s tests -v`
+- Never point tests at the operator’s `data/attendance.db`; the suite uses `tests/tempdb.py` isolated temp files
+- Parallelism: serial (single-process SQLite)
 - Flaky-test handling: TBD

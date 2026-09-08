@@ -32,3 +32,4 @@
 
 ## Learning History
 - 2026-09-08 — initialize-agent: first `.factory/` profiles from detection (Python 3 stdlib + static SPA + SQLite). Architect memory and `plans/` / `test-plans/` left untouched.
+- 2026-09-08 — unit-test-engineer: first suite is stdlib `unittest` under `tests/` (no pytest). Isolated temp SQLite via `tests/tempdb.py`; never `data/attendance.db`. Helpers under test: `fill_gap_meetings`, people write functions.

@@ -14,6 +14,37 @@ const STATUS_LABELS = {
   strong: "Katkı",
 };
 
+const PEOPLE_COPY = {
+  title: "Kişiler",
+  sub: "Yönetici “geldi mi, aktif miydi?” diye sorunca buradan bak.",
+  add: "Kişi ekle",
+  edit: "Düzenle",
+  remove: "Sil",
+  save: "Kaydet",
+  cancel: "Vazgeç",
+  sicil: "Sicil",
+  name: "Ad",
+  position: "Pozisyon",
+  center: "Yetkinlik",
+  email: "E-posta",
+  emailHint: "isteğe bağlı",
+  required: "Sicil ve ad gerekli.",
+  formHint: "Sicil ve ad zorunlu. Pozisyon, yetkinlik ve e-posta isteğe bağlı.",
+  duplicate: "Bu sicil zaten kayıtlı.",
+  empty: "Henüz kişi yok. Kişi ekleyerek yoklama listesini oluşturabilirsin.",
+  noMatch: "Eşleşen kimse yok.",
+  deleteTitle: "Kişiyi sil",
+  deleteConfirm: "Evet, sil",
+  added: "Kişi eklendi",
+  updated: "Kişi güncellendi",
+  deleted: "Kişi silindi",
+  history: "geçmiş",
+  addTitle: "Kişi ekle",
+  editTitle: "Kişiyi düzenle",
+  search: "İsim ara",
+  sessions: "oturum",
+};
+
 const JOINED = new Set(["present", "quiet", "spoke", "strong"]);
 
 function isJoined(p) {
@@ -43,11 +74,14 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
+  const data = await res.json().catch(() => ({ error: res.statusText }));
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || "İstek başarısız");
+    const err = new Error(data.error || "İstek başarısız");
+    err.status = res.status;
+    err.code = data.error;
+    throw err;
   }
-  return res.json();
+  return data;
 }
 
 function toast(text) {
@@ -110,15 +144,19 @@ function route() {
   });
   const run = !parts.length
     ? renderMeetings()
-    : parts[0] === "people" && parts[1]
-      ? renderPerson(parts[1])
-      : parts[0] === "people"
-        ? renderPeople()
-        : parts[0] === "meeting" && parts[1] && parts[2] === "report"
-          ? renderMeetingReport(parts[1])
-          : parts[0] === "meeting" && parts[1]
-            ? renderLive(parts[1], seq)
-            : renderMeetings();
+    : parts[0] === "people" && parts[1] === "new"
+      ? renderPersonForm()
+      : parts[0] === "people" && parts[1] && parts[2] === "edit"
+        ? renderPersonForm(parts[1])
+        : parts[0] === "people" && parts[1]
+          ? renderPerson(parts[1])
+          : parts[0] === "people"
+            ? renderPeople()
+            : parts[0] === "meeting" && parts[1] && parts[2] === "report"
+              ? renderMeetingReport(parts[1])
+              : parts[0] === "meeting" && parts[1]
+                ? renderLive(parts[1], seq)
+                : renderMeetings();
   return Promise.resolve(run).then(() => {
     if (seq !== viewSeq) return;
   });
@@ -391,7 +429,7 @@ function personCard(p) {
         <button type="button" class="join-toggle" data-join="1" aria-pressed="${joined}">Katıldı</button>
         <div class="who">
           <h3 class="person-name">${escapeHtml(p.name)}</h3>
-          <p class="meta">${escapeHtml(p.center || p.position || "")}</p>
+          ${personSubtitle(p) ? `<p class="meta">${escapeHtml(personSubtitle(p))}</p>` : ""}
         </div>
         <button type="button" class="btn miss-btn" data-status="absent" aria-pressed="${p.status === "absent"}">Gelmedi</button>
         <a class="link-quiet" href="#/people/${p.id}">geçmiş</a>
@@ -502,48 +540,194 @@ async function renderMeetingReport(id) {
   });
 }
 
+function personSubtitle(p) {
+  return [p.position, p.center].filter(Boolean).join(" · ");
+}
+
+function peopleDeleteWarning(name) {
+  return `“${name}” silinsin mi? Bu kişinin tüm yoklama kayıtları da silinir. Bu işlem geri alınamaz.`;
+}
+
+function peopleRow(p) {
+  const role = personSubtitle(p);
+  const counts = `${p.present}/${p.total} ${PEOPLE_COPY.sessions}`;
+  const meta = role ? `${escapeHtml(role)} · ${counts}` : counts;
+  return `
+    <article class="meeting-card" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.name)}">
+      <a class="meeting-card-main" href="#/people/${encodeURIComponent(p.id)}">
+        <div>
+          <p class="meeting-title">${escapeHtml(p.name)}</p>
+          <p class="meta">${meta}</p>
+        </div>
+        <span class="chip present">%${p.percent}</span>
+      </a>
+      <div class="meeting-card-actions">
+        <a class="btn ghost" href="#/people/${encodeURIComponent(p.id)}/edit">${PEOPLE_COPY.edit}</a>
+        <button type="button" class="btn danger" data-delete>${PEOPLE_COPY.remove}</button>
+      </div>
+    </article>`;
+}
+
+async function confirmDeletePerson(id, name) {
+  const ok = await confirmDialog({
+    title: PEOPLE_COPY.deleteTitle,
+    body: peopleDeleteWarning(name),
+    confirmLabel: PEOPLE_COPY.deleteConfirm,
+  });
+  if (!ok) return false;
+  await api(`/api/people/${encodeURIComponent(id)}`, { method: "DELETE" });
+  toast(PEOPLE_COPY.deleted);
+  return true;
+}
+
 async function renderPeople() {
   const people = await api("/api/overview");
   $app.innerHTML = `
     <div class="top">
       <div>
-        <h2>Kişiler</h2>
-        <p class="sub">Yönetici “geldi mi, aktif miydi?” diye sorunca buradan bak.</p>
+        <h2>${PEOPLE_COPY.title}</h2>
+        <p class="sub">${PEOPLE_COPY.sub}</p>
       </div>
+      <a class="btn primary" href="#/people/new">${PEOPLE_COPY.add}</a>
     </div>
-    <input class="search" id="search" placeholder="İsim ara" />
+    <input class="search" id="search" placeholder="${PEOPLE_COPY.search}" />
     <div class="grid" id="list" style="margin-top:14px"></div>
   `;
   const draw = (q = "") => {
     const needle = q.trim().toLocaleLowerCase("tr");
     const rows = people.filter((p) => p.name.toLocaleLowerCase("tr").includes(needle));
-    $app.querySelector("#list").innerHTML = rows
-      .map(
-        (p) => `
-        <a class="meeting-card" href="#/people/${p.id}">
-          <div>
-            <p class="meeting-title">${escapeHtml(p.name)}</p>
-            <p class="meta">${escapeHtml(p.center || "")} · ${p.present}/${p.total} oturum</p>
-          </div>
-          <span class="chip present">%${p.percent}</span>
-        </a>`
-      )
-      .join("");
+    const list = $app.querySelector("#list");
+    if (!people.length) {
+      list.innerHTML = `<p class="empty">${PEOPLE_COPY.empty}</p>`;
+      return;
+    }
+    if (!rows.length) {
+      list.innerHTML = `<p class="empty">${PEOPLE_COPY.noMatch}</p>`;
+      return;
+    }
+    list.innerHTML = rows.map(peopleRow).join("");
+    list.querySelectorAll("[data-delete]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const card = btn.closest(".meeting-card");
+        const removed = await confirmDeletePerson(card.dataset.id, card.dataset.name);
+        if (removed) renderPeople();
+      });
+    });
   };
   draw();
   $app.querySelector("#search").addEventListener("input", (e) => draw(e.target.value));
 }
 
+function personFormField({ name, label, value = "", required = false, disabled = false, type = "text", hint = "" }) {
+  const req = required ? "required" : "";
+  const dis = disabled ? "disabled" : "";
+  const hintLine = hint ? `<span class="field-hint">${escapeHtml(hint)}</span>` : "";
+  return `
+    <label class="field">
+      <span class="field-label">${escapeHtml(label)}${required ? " *" : ""}</span>
+      <input id="person-${escapeHtml(name)}" name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value)}" ${req} ${dis} autocomplete="off" />
+      ${hintLine}
+    </label>`;
+}
+
+async function renderPersonForm(editId) {
+  const editing = Boolean(editId);
+  let person = { id: "", name: "", position: "", center: "", email: "" };
+  if (editing) {
+    const report = await api(`/api/people/${encodeURIComponent(editId)}/report`);
+    person = report.person;
+  }
+  $app.innerHTML = `
+    <div class="top">
+      <div>
+        <h2>${editing ? PEOPLE_COPY.editTitle : PEOPLE_COPY.addTitle}</h2>
+        <p class="sub">${editing ? escapeHtml(person.name) : PEOPLE_COPY.formHint}</p>
+      </div>
+      <a class="btn ghost" href="#/people">${PEOPLE_COPY.cancel}</a>
+    </div>
+    <form class="add-card person-form" id="person-form" novalidate>
+      ${personFormField({
+        name: "id",
+        label: PEOPLE_COPY.sicil,
+        value: person.id,
+        required: true,
+        disabled: editing,
+      })}
+      ${personFormField({ name: "name", label: PEOPLE_COPY.name, value: person.name, required: true })}
+      ${personFormField({ name: "position", label: PEOPLE_COPY.position, value: person.position })}
+      ${personFormField({ name: "center", label: PEOPLE_COPY.center, value: person.center })}
+      ${personFormField({
+        name: "email",
+        label: PEOPLE_COPY.email,
+        value: person.email,
+        type: "text",
+        hint: PEOPLE_COPY.emailHint,
+      })}
+      <p class="form-error" id="person-form-error" hidden></p>
+      <div class="modal-actions">
+        <a class="btn ghost" href="#/people">${PEOPLE_COPY.cancel}</a>
+        <button class="btn primary" type="submit">${PEOPLE_COPY.save}</button>
+      </div>
+    </form>
+  `;
+  const form = $app.querySelector("#person-form");
+  const errorEl = $app.querySelector("#person-form-error");
+  const showError = (text) => {
+    errorEl.hidden = !text;
+    errorEl.textContent = text || "";
+  };
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const id = editing ? person.id : (data.id || "").trim();
+    const name = (data.name || "").trim();
+    if (!id || !name) {
+      showError(PEOPLE_COPY.required);
+      return;
+    }
+    const payload = {
+      name,
+      position: (data.position || "").trim(),
+      center: (data.center || "").trim(),
+      email: (data.email || "").trim(),
+    };
+    try {
+      if (editing) {
+        await api(`/api/people/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        toast(PEOPLE_COPY.updated);
+      } else {
+        await api("/api/people", {
+          method: "POST",
+          body: JSON.stringify({ id, ...payload }),
+        });
+        toast(PEOPLE_COPY.added);
+      }
+      location.hash = "#/people";
+    } catch (err) {
+      if (err.status === 409 || err.code === "duplicate_id") {
+        showError(PEOPLE_COPY.duplicate);
+        return;
+      }
+      showError(err.message === "missing_id_or_name" ? PEOPLE_COPY.required : err.message);
+    }
+  });
+}
+
 async function renderPerson(id) {
   const report = await api(`/api/people/${id}/report`);
+  const role = personSubtitle(report.person);
   $app.innerHTML = `
     <div class="top">
       <div>
         <h2>${escapeHtml(report.person.name)}</h2>
-        <p class="sub">${escapeHtml(report.person.position)} · ${escapeHtml(report.person.center)}</p>
+        ${role ? `<p class="sub">${escapeHtml(role)}</p>` : ""}
       </div>
       <div class="live-actions">
-        <a class="btn ghost" href="#/people">Kişiler</a>
+        <a class="btn ghost" href="#/people">${PEOPLE_COPY.title}</a>
+        <a class="btn ghost" href="#/people/${encodeURIComponent(report.person.id)}/edit">${PEOPLE_COPY.edit}</a>
         <button class="btn primary" id="copy" type="button">Yönetici özetini kopyala</button>
       </div>
     </div>
