@@ -1,0 +1,16 @@
+# Local runtime data — never push a champion's roster or marks
+data/*.db
+data/*.db-journal
+data/backup-*.json
+seed/people.json
+
+# Spreadsheet rosters stay on the machine that imported them
+*.xlsx
+*.xls
+*.csv
+
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
