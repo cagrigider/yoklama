@@ -59,7 +59,11 @@
   "test_cases": [
     {
       "id": "TC-1",
-      "traces_to": ["TASK-1.1.1#AC1", "TASK-1.1.2#AC6", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC1",
+        "TASK-1.1.2#AC6",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Don't-repeat inserts only first_date and does not require end_date",
       "setup": "Isolated TEST_ROOT (rsync project excluding data/*.db and seed/people.json). Empty data/. python3 app.py from TEST_ROOT. BASE_URL=http://127.0.0.1:8765. Confirm GET /api/meta configured is false (or equivalent).",
       "technique": "curl",
@@ -76,7 +80,11 @@
     },
     {
       "id": "TC-2",
-      "traces_to": ["TASK-1.1.1#AC2", "TASK-1.1.2#AC7", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC2",
+        "TASK-1.1.2#AC7",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Weekly series inserts the weekday at 7-day steps through end_date",
       "setup": "Fresh isolated TEST_ROOT empty DB. python3 app.py.",
       "technique": "curl",
@@ -91,7 +99,12 @@
     },
     {
       "id": "TC-3",
-      "traces_to": ["TASK-1.1.1#AC2", "TASK-1.1.2#AC7", "TASK-1.1.1#AC8", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC2",
+        "TASK-1.1.2#AC7",
+        "TASK-1.1.1#AC8",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Biweekly series matches the ADR example dates",
       "setup": "Fresh isolated TEST_ROOT empty DB. python3 app.py.",
       "technique": "curl",
@@ -108,7 +121,12 @@
     },
     {
       "id": "TC-4",
-      "traces_to": ["TASK-1.1.1#AC3", "TASK-1.1.2#AC7", "TASK-1.1.1#AC8", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC3",
+        "TASK-1.1.2#AC7",
+        "TASK-1.1.1#AC8",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Monthly uses weekday plus week-of-month ordinal and skips months with no such day",
       "setup": "Two fresh isolated trees (or reset DB between substeps). python3 app.py each time.",
       "technique": "curl",
@@ -124,7 +142,10 @@
     },
     {
       "id": "TC-5",
-      "traces_to": ["TASK-1.1.1#AC4", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC4",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Fill-gaps inserts only missing ISO dates; existing meeting and marks unchanged; no UNIQUE(date)",
       "setup": "Isolated TEST_ROOT. Create configured profile with don't-repeat 2026-09-09. POST /api/meetings extra on 2026-09-23 titled Extra 23. POST /api/people {id:\"10001\",name:\"Jane Doe\"}. PUT attendance present for 10001 on that extra. sqlite3: record extra id, attendance row, and PRAGMA/index/schema of meetings.",
       "technique": "curl",
@@ -142,7 +163,11 @@
     },
     {
       "id": "TC-6",
-      "traces_to": ["TASK-1.1.1#AC5", "TASK-1.2.1#AC2", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC5",
+        "TASK-1.2.1#AC2",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Shortening end_date never deletes meetings or attendance (including extras)",
       "setup": "Isolated TEST_ROOT. Profile weekly 2026-09-09..2026-10-07. POST two extra meetings (e.g. 2026-09-10 Extra A, 2026-09-17 Extra B). Add Jane Doe 10001; mark present on Extra A. Snapshot meeting ids and attendance.",
       "technique": "curl",
@@ -159,7 +184,11 @@
     },
     {
       "id": "TC-7",
-      "traces_to": ["TASK-1.1.1#AC6", "TASK-1.1.2#AC8", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC6",
+        "TASK-1.1.2#AC8",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "end_date before first_date is rejected; no profile and no meetings written",
       "setup": "Fresh empty isolated TEST_ROOT. python3 app.py. Snapshot: sqlite3 count group_profile (0) and meetings (0).",
       "technique": "curl",
@@ -177,7 +206,10 @@
     },
     {
       "id": "TC-8",
-      "traces_to": ["TASK-1.1.1#AC7", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.1#AC7",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Generated meetings have kind series; user extras stay extra",
       "setup": "Empty isolated TEST_ROOT. python3 app.py.",
       "technique": "curl",
@@ -193,7 +225,10 @@
     },
     {
       "id": "TC-9",
-      "traces_to": ["TASK-1.1.2#AC1", "TASK-1.1.2#AC13"],
+      "traces_to": [
+        "TASK-1.1.2#AC1",
+        "TASK-1.1.2#AC13"
+      ],
       "title": "Empty database opens the first-run wizard, not the meeting list",
       "setup": "Empty isolated TEST_ROOT (no people, no meetings, no profile). python3 app.py. Playwright Chromium.",
       "technique": "playwright-cli",
@@ -210,11 +245,16 @@
       ],
       "test_data": "Empty DB. No seed/people.json.",
       "expected_result": "Wizard first. Meeting list not first. Meta unconfigured. Toplantılar/Kişiler nav and hashes cannot leave the wizard while unconfigured.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/wizard-gate.spec.ts"
+      }
     },
     {
       "id": "TC-10",
-      "traces_to": ["TASK-1.1.2#AC2"],
+      "traces_to": [
+        "TASK-1.1.2#AC2"
+      ],
       "title": "WHILE a group profile exists the wizard is not shown",
       "setup": "Isolated TEST_ROOT. Complete TC-1 save (or PUT profile don't-repeat). Playwright.",
       "technique": "playwright-cli",
@@ -226,11 +266,17 @@
       ],
       "test_data": "Saved profile Grup 5 / 2026-09-09 / none.",
       "expected_result": "Meeting list. No wizard.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/wizard-gate.spec.ts"
+      }
     },
     {
       "id": "TC-11",
-      "traces_to": ["TASK-1.1.2#AC3", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.2#AC3",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "Meetings without a profile get a default upgrade insert and skip the wizard without generating series",
       "setup": "Isolated TEST_ROOT. Before starting the app, create data/attendance.db with people+meetings+attendance only (no group_profile): Jane Doe 10001; meeting id 1 date 2026-08-12 kind extra title Eski; attendance present. Do not insert group_profile. Then python3 app.py (init must run). Playwright + curl.",
       "technique": "curl",
@@ -248,7 +294,9 @@
     },
     {
       "id": "TC-12",
-      "traces_to": ["TASK-1.1.2#AC4"],
+      "traces_to": [
+        "TASK-1.1.2#AC4"
+      ],
       "title": "Seeding people from local seed/people.json does not skip the wizard",
       "setup": "Isolated TEST_ROOT with empty data/ but seed/people.json containing one synthetic person (Ada Lovelace, id 10099, ada.lovelace@example.com). No meetings. python3 app.py. Playwright.",
       "technique": "playwright-cli",
@@ -260,11 +308,16 @@
       ],
       "test_data": "seed/people.json: [{\"id\":\"10099\",\"name\":\"Ada Lovelace\",\"position\":\"\",\"center\":\"\",\"email\":\"ada.lovelace@example.com\"}]. Never a real roster.",
       "expected_result": "People seeded; wizard still required; no profile.",
-      "teardown": "Stop server. Delete TEST_ROOT including the temp seed file."
+      "teardown": "Stop server. Delete TEST_ROOT including the temp seed file.",
+      "automated": {
+        "spec": "webui/specs/wizard-gate.spec.ts"
+      }
     },
     {
       "id": "TC-13",
-      "traces_to": ["TASK-1.1.2#AC5"],
+      "traces_to": [
+        "TASK-1.1.2#AC5"
+      ],
       "title": "GroupProfile is a SQLite singleton in attendance.db; schema changes are additive",
       "setup": "Isolated TEST_ROOT. Complete a valid don't-repeat save. Keep sqlite3 and the tree available. Also copy a second pre-populated meetings DB (synthetic) aside to prove start does not DROP/reseed.",
       "technique": "curl",
@@ -281,7 +334,10 @@
     },
     {
       "id": "TC-14",
-      "traces_to": ["TASK-1.1.2#AC12", "TASK-1.1.2#AC8"],
+      "traces_to": [
+        "TASK-1.1.2#AC12",
+        "TASK-1.1.2#AC8"
+      ],
       "title": "Wizard labels are Turkish; don't-repeat hides end date; inverted dates stay on the wizard",
       "setup": "Empty isolated TEST_ROOT. python3 app.py. Playwright.",
       "technique": "playwright-cli",
@@ -295,11 +351,17 @@
       ],
       "test_data": "Empty wizard. Inverted dates 2026-09-09 / 2026-09-01.",
       "expected_result": "Turkish copy. End date hidden on don't-repeat. Date error keeps the champion on the wizard with no profile.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/wizard-gate.spec.ts"
+      }
     },
     {
       "id": "TC-15",
-      "traces_to": ["TASK-1.1.2#AC9", "TASK-1.2.3#AC5"],
+      "traces_to": [
+        "TASK-1.1.2#AC9",
+        "TASK-1.2.3#AC5"
+      ],
       "title": "Wizard with zero people persists profile and meetings; empty people list is valid",
       "setup": "Empty isolated TEST_ROOT, no seed/people.json. python3 app.py. Playwright + curl.",
       "technique": "playwright-cli",
@@ -311,11 +373,19 @@
       ],
       "test_data": "No roster file. Grup 5.",
       "expected_result": "Profile+meeting persist. People empty. Empty list allowed.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/wizard-empty-roster.spec.ts"
+      }
     },
     {
       "id": "TC-16",
-      "traces_to": ["TASK-1.1.2#AC10", "TASK-1.2.2#AC6", "TASK-1.1.2#AC14", "TASK-1.2.2#AC8"],
+      "traces_to": [
+        "TASK-1.1.2#AC10",
+        "TASK-1.2.2#AC6",
+        "TASK-1.1.2#AC14",
+        "TASK-1.2.2#AC8"
+      ],
       "title": "Rejected import does not roll back an already-saved profile or meetings",
       "setup": "Empty isolated TEST_ROOT. python3 app.py.",
       "technique": "curl",
@@ -332,7 +402,10 @@
     },
     {
       "id": "TC-17",
-      "traces_to": ["TASK-1.1.2#AC11", "TASK-1.1.2#AC14"],
+      "traces_to": [
+        "TASK-1.1.2#AC11",
+        "TASK-1.1.2#AC14"
+      ],
       "title": "App accepts 127.0.0.1 and does not listen on 0.0.0.0; no password",
       "setup": "Isolated TEST_ROOT. python3 app.py. No Authorization headers used anywhere.",
       "technique": "curl",
@@ -349,7 +422,11 @@
     },
     {
       "id": "TC-18",
-      "traces_to": ["TASK-1.2.1#AC1", "TASK-1.1.1#AC8", "TASK-1.2.1#AC8"],
+      "traces_to": [
+        "TASK-1.2.1#AC1",
+        "TASK-1.1.1#AC8",
+        "TASK-1.2.1#AC8"
+      ],
       "title": "Settings changes name and series with the same fill-gaps and end-date reject as first-run",
       "setup": "Isolated TEST_ROOT. PUT profile don't-repeat Grup 5 / 2026-09-09. Playwright + curl.",
       "technique": "playwright-cli",
@@ -363,11 +440,16 @@
       ],
       "test_data": "Rename Grup 5 → Grup 7. Biweekly 2026-09-09..2026-10-07 then inverted end 2026-09-01.",
       "expected_result": "Settings uses the same shared fill-gaps function and reject rules as first-run. Empty #settings-import host present. FR-007 series portion.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/settings.spec.ts"
+      }
     },
     {
       "id": "TC-19",
-      "traces_to": ["TASK-1.2.1#AC3"],
+      "traces_to": [
+        "TASK-1.2.1#AC3"
+      ],
       "title": "Meeting-list header shows the saved group name",
       "setup": "Isolated TEST_ROOT. Profile name Grup 5. Playwright.",
       "technique": "playwright-cli",
@@ -378,11 +460,17 @@
       ],
       "test_data": "groupName Grup 5.",
       "expected_result": "Header displays Grup 5. FR-019.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/settings.spec.ts"
+      }
     },
     {
       "id": "TC-20",
-      "traces_to": ["TASK-1.2.1#AC4", "TASK-1.2.1#AC8"],
+      "traces_to": [
+        "TASK-1.2.1#AC4",
+        "TASK-1.2.1#AC8"
+      ],
       "title": "Configured install shows meeting list with Settings and People; extra meeting CUD still works",
       "setup": "Configured isolated TEST_ROOT (don't-repeat). Playwright + curl.",
       "technique": "playwright-cli",
@@ -396,11 +484,16 @@
       ],
       "test_data": "Extra date 2026-09-12. Synthetic titles.",
       "expected_result": "Configured chrome + extra CUD as today. Wizard absent. Empty Settings import host present.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/settings.spec.ts"
+      }
     },
     {
       "id": "TC-21",
-      "traces_to": ["TASK-1.2.1#AC5"],
+      "traces_to": [
+        "TASK-1.2.1#AC5"
+      ],
       "title": "Live tick, tags, notes, and copyable summaries still work; attendance write path is not rewritten",
       "setup": "Configured TEST_ROOT. People Jane Doe 10001. One meeting. Playwright. Keep app.py available.",
       "technique": "playwright-cli",
@@ -414,11 +507,16 @@
       ],
       "test_data": "Jane Doe 10001. Note 'deneme notu'. Tag question.",
       "expected_result": "Live tick UX and write handler remain. FR-017.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/live-tick.spec.ts"
+      }
     },
     {
       "id": "TC-22",
-      "traces_to": ["TASK-1.2.1#AC6"],
+      "traces_to": [
+        "TASK-1.2.1#AC6"
+      ],
       "title": "Smoke: one attendance mark on a roster of at most 80 people persists (NFR-001, non-gating)",
       "setup": "Isolated TEST_ROOT. Configured meeting. POST 80 synthetic people ids 10100–10179 names Test User 00..79, emails test.user.NN@example.com. Playwright or curl. Do not treat wall-clock as a suite gate.",
       "technique": "curl",
@@ -431,11 +529,16 @@
       "test_data": "80 fictional people Test User NN @example.com. One mark on 10100.",
       "expected_result": "Mark persists and the row updates. Timing is observational except hang >5s.",
       "teardown": "Stop server. Delete TEST_ROOT.",
-      "tags": ["smoke", "manual"]
+      "tags": [
+        "smoke",
+        "manual"
+      ]
     },
     {
       "id": "TC-23",
-      "traces_to": ["TASK-1.2.1#AC7"],
+      "traces_to": [
+        "TASK-1.2.1#AC7"
+      ],
       "title": "Settings labels are in Turkish",
       "setup": "Configured isolated TEST_ROOT. Playwright.",
       "technique": "playwright-cli",
@@ -447,11 +550,17 @@
       ],
       "test_data": "None beyond configured Grup 5.",
       "expected_result": "Settings copy is Turkish. NFR-003.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/settings.spec.ts"
+      }
     },
     {
       "id": "TC-24",
-      "traces_to": ["TASK-1.2.2#AC1", "TASK-1.2.2#AC8"],
+      "traces_to": [
+        "TASK-1.2.2#AC1",
+        "TASK-1.2.2#AC8"
+      ],
       "title": "Valid CSV, people.json, and simple xlsx upsert by sicil and do not delete absentees",
       "setup": "Configured isolated TEST_ROOT. POST people 10001 Old Name and 10002 Keep Me. python3 app.py.",
       "technique": "curl",
@@ -468,7 +577,10 @@
     },
     {
       "id": "TC-25",
-      "traces_to": ["TASK-1.2.2#AC2", "TASK-1.2.2#AC8"],
+      "traces_to": [
+        "TASK-1.2.2#AC2",
+        "TASK-1.2.2#AC8"
+      ],
       "title": "Any row missing sicil/id or name rejects the whole file; UI explains; people unchanged",
       "setup": "Configured TEST_ROOT with 10001 Jane Doe. curl + Playwright.",
       "technique": "curl",
@@ -483,7 +595,10 @@
     },
     {
       "id": "TC-26",
-      "traces_to": ["TASK-1.2.2#AC3", "TASK-1.2.2#AC8"],
+      "traces_to": [
+        "TASK-1.2.2#AC3",
+        "TASK-1.2.2#AC8"
+      ],
       "title": "Import is stdlib-only JSON body, not multipart; no requirements.txt for this path",
       "setup": "Deliverable tree at TEST_ROOT (copy of source). Configured app running.",
       "technique": "curl",
@@ -499,7 +614,10 @@
     },
     {
       "id": "TC-27",
-      "traces_to": ["TASK-1.2.2#AC4", "TASK-1.2.2#AC8"],
+      "traces_to": [
+        "TASK-1.2.2#AC4",
+        "TASK-1.2.2#AC8"
+      ],
       "title": "Exotic xlsx (macros, multiple header rows, password-like encryption) is rejected with CSV guidance",
       "setup": "Configured isolated TEST_ROOT with 10001 Jane Doe.",
       "technique": "curl",
@@ -514,7 +632,10 @@
     },
     {
       "id": "TC-28",
-      "traces_to": ["TASK-1.2.2#AC5", "TASK-1.2.2#AC8"],
+      "traces_to": [
+        "TASK-1.2.2#AC5",
+        "TASK-1.2.2#AC8"
+      ],
       "title": "Numeric xlsx sicil stored without trailing .0; CSV UTF-8 BOM is tolerated",
       "setup": "Configured empty-people or known people TEST_ROOT.",
       "technique": "curl",
@@ -528,7 +649,9 @@
     },
     {
       "id": "TC-29",
-      "traces_to": ["TASK-1.2.2#AC6"],
+      "traces_to": [
+        "TASK-1.2.2#AC6"
+      ],
       "title": "Optional wizard import and Settings import both use the same upsert behavior",
       "setup": "Two isolated runs. Playwright file inputs. Valid CSV 10001 Ada Lovelace.",
       "technique": "playwright-cli",
@@ -539,11 +662,16 @@
       ],
       "test_data": "Ada Lovelace 10001 ada.lovelace@example.com. Valid CSV sicil,name.",
       "expected_result": "Both screens share import behavior. Rejected import does not undo profile.",
-      "teardown": "Close browser. Stop servers. Delete TEST_ROOTs."
+      "teardown": "Close browser. Stop servers. Delete TEST_ROOTs.",
+      "automated": {
+        "spec": "webui/specs/import.spec.ts"
+      }
     },
     {
       "id": "TC-30",
-      "traces_to": ["TASK-1.2.2#AC7"],
+      "traces_to": [
+        "TASK-1.2.2#AC7"
+      ],
       "title": "README names the column contract; git-tracked tree omits data/*.db and real seed/people.json",
       "setup": "Read-only against the real repo BASE=/Users/cagri.gider/Documents/AI_Champions/attendance (not TEST_ROOT). No server required. Do not open operator DB.",
       "technique": "integration",
@@ -558,7 +686,10 @@
     },
     {
       "id": "TC-31",
-      "traces_to": ["TASK-1.2.3#AC1", "TASK-1.2.3#AC8"],
+      "traces_to": [
+        "TASK-1.2.3#AC1",
+        "TASK-1.2.3#AC8"
+      ],
       "title": "Add person with sicil and name succeeds; missing sicil or name creates no person",
       "setup": "Configured isolated TEST_ROOT. curl + Playwright.",
       "technique": "curl",
@@ -574,7 +705,10 @@
     },
     {
       "id": "TC-32",
-      "traces_to": ["TASK-1.2.3#AC2", "TASK-1.2.3#AC8"],
+      "traces_to": [
+        "TASK-1.2.3#AC2",
+        "TASK-1.2.3#AC8"
+      ],
       "title": "Adding a duplicate sicil/id returns 409 and does not silently overwrite",
       "setup": "Configured TEST_ROOT. Person 10001 Jane Doe position Dev center QA.",
       "technique": "curl",
@@ -590,7 +724,10 @@
     },
     {
       "id": "TC-33",
-      "traces_to": ["TASK-1.2.3#AC3", "TASK-1.2.3#AC8"],
+      "traces_to": [
+        "TASK-1.2.3#AC3",
+        "TASK-1.2.3#AC8"
+      ],
       "title": "Edit changes name/position/center (email optional); sicil is immutable and disabled in the UI",
       "setup": "Configured TEST_ROOT. Person 10001 Jane Doe. curl + Playwright.",
       "technique": "playwright-cli",
@@ -601,11 +738,17 @@
       ],
       "test_data": "Jane Q. Doe / QA Engineer / QA / jane.doe@example.com.",
       "expected_result": "Editable fields update. Sicil locked. FR-012.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/people.spec.ts"
+      }
     },
     {
       "id": "TC-34",
-      "traces_to": ["TASK-1.2.3#AC4", "TASK-1.2.3#AC8"],
+      "traces_to": [
+        "TASK-1.2.3#AC4",
+        "TASK-1.2.3#AC8"
+      ],
       "title": "Confirm delete removes person and attendance; cancel leaves data; warning mentions attendance",
       "setup": "Configured TEST_ROOT. Jane Doe 10001 with present mark on a meeting. Playwright + curl.",
       "technique": "playwright-cli",
@@ -616,11 +759,16 @@
       ],
       "test_data": "Jane Doe 10001 with one present attendance row.",
       "expected_result": "Cancel is non-destructive. Confirm cascades. FR-013. Irreversible by design.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/people.spec.ts"
+      }
     },
     {
       "id": "TC-35",
-      "traces_to": ["TASK-1.2.3#AC5"],
+      "traces_to": [
+        "TASK-1.2.3#AC5"
+      ],
       "title": "Empty people list is a valid UI and API state",
       "setup": "Configured TEST_ROOT, zero people (wizard skip import). Playwright.",
       "technique": "playwright-cli",
@@ -630,11 +778,16 @@
       ],
       "test_data": "Empty roster.",
       "expected_result": "Empty list is valid (also covered with wizard in TC-15; this case is people-surface specific).",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/people.spec.ts"
+      }
     },
     {
       "id": "TC-36",
-      "traces_to": ["TASK-1.2.3#AC6"],
+      "traces_to": [
+        "TASK-1.2.3#AC6"
+      ],
       "title": "Position and center show on the person row or report and on the live roster when present",
       "setup": "Configured TEST_ROOT. POST 10001 Jane Doe position QA Engineer center QA. Playwright.",
       "technique": "playwright-cli",
@@ -645,11 +798,16 @@
       ],
       "test_data": "Jane Doe 10001, position QA Engineer, center QA. No real org names.",
       "expected_result": "FR-018: position/center visible where present.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/people.spec.ts"
+      }
     },
     {
       "id": "TC-37",
-      "traces_to": ["TASK-1.2.3#AC7"],
+      "traces_to": [
+        "TASK-1.2.3#AC7"
+      ],
       "title": "People add/edit/delete copy is in Turkish",
       "setup": "Configured TEST_ROOT. Playwright.",
       "technique": "playwright-cli",
@@ -660,11 +818,21 @@
       ],
       "test_data": "Any synthetic person for edit/delete chrome.",
       "expected_result": "People write UI is Turkish. NFR-003.",
-      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT.",
+      "automated": {
+        "spec": "webui/specs/people.spec.ts"
+      }
     },
     {
       "id": "TC-38",
-      "traces_to": ["TASK-1.1.2#AC6", "TASK-1.2.2#AC2", "TASK-1.2.3#AC1", "TASK-1.1.2#AC14", "TASK-1.2.2#AC8", "TASK-1.2.3#AC8"],
+      "traces_to": [
+        "TASK-1.1.2#AC6",
+        "TASK-1.2.2#AC2",
+        "TASK-1.2.3#AC1",
+        "TASK-1.1.2#AC14",
+        "TASK-1.2.2#AC8",
+        "TASK-1.2.3#AC8"
+      ],
       "title": "Malformed JSON bodies yield 400 on profile, import, and people POST (hygiene)",
       "setup": "Configured isolated TEST_ROOT (don't-repeat already saved so people POST is reachable). python3 app.py.",
       "technique": "curl",
@@ -677,11 +845,18 @@
       "test_data": "Broken JSON '{not json'.",
       "expected_result": "400 malformed at the transport layer. No writes.",
       "teardown": "Stop server. Delete TEST_ROOT.",
-      "tags": ["hygiene", "above-FRD"]
+      "tags": [
+        "hygiene",
+        "above-FRD"
+      ]
     },
     {
       "id": "TC-39",
-      "traces_to": ["TASK-1.2.3#AC3", "TASK-1.2.3#AC4", "TASK-1.2.3#AC8"],
+      "traces_to": [
+        "TASK-1.2.3#AC3",
+        "TASK-1.2.3#AC4",
+        "TASK-1.2.3#AC8"
+      ],
       "title": "PUT/DELETE unknown person id returns 404 (hygiene)",
       "setup": "Configured TEST_ROOT. No person 19999.",
       "technique": "curl",
@@ -693,7 +868,10 @@
       "test_data": "Unknown id 19999.",
       "expected_result": "404 not-found. No phantom upsert on PUT.",
       "teardown": "Stop server. Delete TEST_ROOT.",
-      "tags": ["hygiene", "above-FRD"]
+      "tags": [
+        "hygiene",
+        "above-FRD"
+      ]
     }
   ],
   "excluded_coverage": [

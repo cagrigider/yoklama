@@ -2,21 +2,26 @@
 
 <!-- factory-version: 1.3.0 -->
 > web-ui-tester tuning — Playwright web UI suite conventions. Read by the `web-ui-tester`.
-> Last updated: 2026-09-08
+> Last updated: 2026-09-09
 
 ## Suite Layout
-- Spec directory: none yet (`playwright.config.*` absent). Default: `webui/` with `webui/specs/` + `webui/helpers/`; config at the project root when first authored
-- Naming: `<flow>.spec.ts`
+- Spec directory: `webui/specs/` + `webui/helpers/`; `playwright.config.ts` at the project root
+- Naming: `<flow>.spec.ts` (`wizard-gate`, `wizard-empty-roster`, `settings`, `live-tick`, `import`, `people`)
+- Isolation helper: `webui/helpers/isolated-app.mjs` (copy tree excluding `data/*.db` and `seed/people.json`; never operator DB)
 
 ## Selector Policy
 - Prefer getByRole / getByLabel / getByTestId; no positional or deep-CSS chains.
-- Test-id attribute: TBD (today: `data-nav` on tabs, `#app` mount; no `data-testid`). Product copy is Turkish — role/name locators must use Turkish accessible names, not English spec strings.
+- Test-id attribute: TBD (today: `data-nav` on tabs, `#app` mount, `#wizard-form` / `#settings-import` / `#settings-roster-file` / `#person-id`). Product copy is Turkish — role/name locators must use Turkish accessible names, not English spec strings.
+- Live roster: `.person-row` scoped by person name + `getByRole('button', { name: 'Katıldı'|'Gelmedi' })`. People delete uses `getByRole('dialog')`.
+- Between live-tick PUTs wait ~600ms — product `armInputLock` is 500ms.
 
 ## Runtime
-- App start for testing: `python3 app.py` from an **isolated temp tree** (never the operator `data/attendance.db`). See TESTPLAN-yoklama-setup isolated runtime.
-- baseURL: http://127.0.0.1:8765
+- App start for testing: Playwright `webServer` runs `node webui/helpers/isolated-app.mjs --port 18765` (copies to `/tmp/yoklama-setup-*`, `python3 app.py` from that copy). Never `data/attendance.db`.
+- baseURL: http://127.0.0.1:18765 (dedicated test bind; **not** operator 8765)
+- Shared DB reset between tests via sqlite DELETE on the temp copy; TC-12 starts a second isolated copy with synthetic `seed/people.json`
 - Browser matrix: chromium
 - Run mode: headless default; both headless and headful supported — `--headed` (specs) / `headless: false` (live-drive) override
+- Workers: 1 (`fullyParallel: false`) so the shared isolated DB reset stays serial
 
 ## Web UI Test Report JSON Schema (WEBUIREPORT-{slug}.json)
 {

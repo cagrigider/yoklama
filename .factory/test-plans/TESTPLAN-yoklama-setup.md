@@ -599,3 +599,18 @@ N/A (see JSON `excluded_coverage`): **401/403** (no auth), **429** (no throttle)
 ## Traceability (computed)
 
 plan-verify.mjs: **39** cases; **5/5** tasks covered; **46/46** ACs traced; verdict **complete**; untraced **none**.
+
+---
+
+## Automated Playwright specs (web-ui-tester)
+
+Green `playwright-cli` cases are back-annotated in `TESTPLAN-yoklama-setup.json` as `automated.spec` for the qa-engineer (`npx playwright test <spec>`). Isolated webServer copies the tree to `/tmp` (never `data/attendance.db` / `seed/people.json`) and binds `127.0.0.1:18765`.
+
+| ID | spec |
+|----|------|
+| TC-9, TC-10, TC-12, TC-14 | `webui/specs/wizard-gate.spec.ts` |
+| TC-15 | `webui/specs/wizard-empty-roster.spec.ts` |
+| TC-18, TC-19, TC-20, TC-23 | `webui/specs/settings.spec.ts` |
+| TC-21 | `webui/specs/live-tick.spec.ts` |
+| TC-29 | `webui/specs/import.spec.ts` |
+| TC-33, TC-34, TC-35, TC-36, TC-37 | `webui/specs/people.spec.ts` |

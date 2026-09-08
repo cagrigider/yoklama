@@ -15,6 +15,12 @@ __pycache__/
 .env
 .env.*
 
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+webui/.isolated-runtime.json
+
 # adFactory secrets and scratch (keep .factory/.env.example tracked)
 .factory/.env
 !.factory/.env.example

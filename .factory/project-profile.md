@@ -25,10 +25,11 @@
   - seed → `seed/` (type: optional first roster; `people.json` gitignored, `people.example.json` tracked synthetic)
 
 ## Versioning
-- File: TBD (no version field in the tree; no CHANGELOG yet)
+- File: TBD (no version field in the tree)
 - Format: TBD
 - Strategy: single
 - Keys: TBD (git tags on `main` until a version file is introduced)
+- Changelog: `CHANGELOG.md` at the project root; sprint entries go under `## [Unreleased]`
 
 ## Learning History
 - 2026-09-08 — initialize-agent: first `.factory/` profiles from detection (Python 3 stdlib + static SPA + SQLite). Architect memory and `plans/` / `test-plans/` left untouched.
@@ -37,3 +38,6 @@
 - 2026-09-09 — unit-test-engineer: TASK-1.2.1 Settings UI. No new Python — `tests/test_settings_ui.py` reads SPA sources and asserts `#settings-import` plus hash `#/settings`. PUT `/api/profile` and fill_gap stay in existing suites. No Playwright.
 - 2026-09-09 — unit-tester: full suite `python3 -m unittest discover -s tests -v` → 32 passed / 0 failed (2.308s). Isolated temp SQLite only; `data/attendance.db` unused. New vs prior report: `SettingsUiHostTest` (TASK-1.2.1).
 - 2026-09-09 — unit-test-engineer: TASK-1.2.2 `POST /api/people/import` suite (`tests/test_people_import.py`). Helpers via `import_people`; HTTP via in-process `127.0.0.1:0`. Duplicate file ids = last-row-wins. Minimal stdlib xlsx zip for numeric sicil. Never `data/attendance.db`.
+- 2026-09-09 — security-agent: yoklama-setup sprint `ff2221f..HEAD` + tree secret scan. Status NEEDS ATTENTION, no Critical/High (sprint not halted). Pass: loopback `127.0.0.1`, parameterized SQL, PII gitignored, no pip/npm. Medium: live `personCard` interpolates raw `p.id`. Low: unbounded `Content-Length`; `serve_static` `startswith`. Report: `SECURITYREPORT.md`.
+- 2026-09-09 — web-ui-tester: first Playwright suite under `webui/specs/` (chromium, headless). Isolated `webServer` copies the tree to `/tmp` and binds `127.0.0.1:18765` — never operator `data/attendance.db` or Grup 8 `seed/people.json`. Root `package.json` is Playwright-only (dev). 16/16 playwright-cli cases green; `automated.spec` on TESTPLAN-yoklama-setup. Report: `WEBUIREPORT-yoklama-setup`.
+- 2026-09-09 — changelog: first `CHANGELOG.md` at the project root. No version file; yoklama-setup sprint (`6739c05`..HEAD plus uncommitted Playwright/security/architect artifacts) recorded under `## [Unreleased]`. Changelog profile File set from TBD to `CHANGELOG.md`.
