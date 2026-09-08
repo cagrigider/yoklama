@@ -1,0 +1,854 @@
+{
+  "requirement": "REQ-yoklama-setup",
+  "plan": "PLAN-yoklama-setup",
+  "generated_by": "test-designer",
+  "test_plan": {
+    "identifier": "TESTPLAN-yoklama-setup",
+    "introduction": "IEEE 829 integration test plan for Yoklama shareable setup (REQ-yoklama-setup / EPIC-1). Designed test-first against PLAN-yoklama-setup and the reviewed FRD. The BA Gherkin set (@TC-BE-001..016 / @TC-FE-001..014 in docs/analysis/yoklama-setup/test/testcases-yoklama-setup.en.md) is the acceptance layer; this plan is the integration layer. Cases reference those ids in steps and trace plan ACs as TASK-KEY#ACn. Design effort is on isolated-temp-DB execution, fill-gaps/monthly ordinal, operator upgrade insert (ADR-0001), stdlib import transport (ADR-0002), Settings vs wizard shared series, people 409, live-tick non-regression, and the HTTP error-code matrix. NFR-001 is one non-gating smoke case. Architect ADRs 0001/0002/0003 are in force.",
+    "test_items": [
+      "TASK-1.1.1 — meeting series fill-gaps (none/weekly/biweekly/monthly, skip existing ISO date, never DELETE, kind=series)",
+      "TASK-1.1.2 — GroupProfile SQLite singleton, first-run wizard gate, ADR-0001 upgrade insert, 127.0.0.1 bind",
+      "TASK-1.2.1 — Settings + header group name + live-tick preserve + NFR-001 smoke",
+      "TASK-1.2.2 — roster import (CSV/JSON/xlsx, all-or-nothing upsert) + README/git contract",
+      "TASK-1.2.3 — people POST/PUT/DELETE (409 duplicate, immutable sicil, cascade delete)",
+      "Local Python app at http://127.0.0.1:8765 driven from an isolated temp tree so the operator Grup 8 database is never the test DB"
+    ],
+    "features_to_test": [
+      "Empty-clone first-run wizard vs configured meeting list (ADR-0001)",
+      "Operator upgrade: meetings exist, no profile → default singleton insert, no series, no wizard",
+      "seed/people.json filling an empty people table does not skip the wizard",
+      "Don't-repeat / weekly / biweekly / monthly fill-gaps per ADR-0003, including fifth-weekday month skip",
+      "end_date < first_date rejected with no profile or meeting writes",
+      "Shortening end date never deletes meetings or attendance; no UNIQUE(date)",
+      "Generated meetings kind=series; POST /api/meetings extras stay extra",
+      "Valid profile+series commit independent of a later rejected import (two transactions)",
+      "Settings reuses the same fill-gaps and date-reject rules; header shows group name",
+      "Live joined/absent tick, tags, notes, copyable summaries, extra meeting CUD unchanged",
+      "NFR-001: one attendance mark on ≤80 people persists (manual/smoke, not a flaky gate)",
+      "Import upsert by sicil/id from CSV, people.json, simple first-sheet xlsx; absentees not deleted",
+      "All-or-nothing import validation; exotic xlsx fail-closed to CSV; numeric sicil without .0; UTF-8 BOM",
+      "JSON body import (not multipart); stdlib-only; no requirements.txt",
+      "People add/edit/delete; 409 on duplicate id; sicil disabled on edit; confirm cascade",
+      "Turkish wizard, Settings, and people forms; empty roster is valid",
+      "Position/center visible on people row, person report, and live roster when present",
+      "Loopback bind 127.0.0.1 not 0.0.0.0; no password; git omits data/*.db and real seed/people.json"
+    ],
+    "features_not_to_test": [
+      "Hosted multi-user product, login, Teams auto-attendance, guests, managers as app users (FRD out of scope)",
+      "Operator Grup 8 production PII — tests use only synthetic fixtures on a temp tree",
+      "OpenAPI / ba-services contracts — none exist; routes extend existing JSON Handler",
+      "NFR-001 as an automated wall-clock pass/fail gate (architect F-5) — TC-22 records elapsed time as smoke only",
+      "The BA Gherkin scenarios as a separately executed suite — they are the acceptance layer; this plan executes the equivalent integration procedures and points at @TC-BE-* / @TC-FE-* (see excluded_coverage)",
+      "pip/openpyxl Excel engine and multipart upload — forbidden by ADR-0002",
+      "UNIQUE(date) on meetings — must remain absent (ADR-0003 / F-9)"
+    ],
+    "approach": "Every case runs against an isolated temp copy of the project (rsync excluding data/*.db and seed/people.json) so the operator Grup 8 SQLite file is never opened. Start with `python3 app.py` from that temp root; BASE_URL=http://127.0.0.1:8765. If port 8765 is busy, stop the leftover Yoklama process for the run — do not point tests at the operator data directory. If the deliverable documents YOKLAMA_DATA_DIR / YOKLAMA_DB, set it to a temp path instead of copying the tree. Technique: curl (or equivalent HTTP) for profile/series/import/people/meta/meetings/attendance; playwright-cli for wizard, Settings, people UI, header, and live-tick regression. Harness contract (substitute documented names and record the substitution): GET /api/meta includes configured (bool) and groupName (string), and may include firstDate, endDate, repeatRule; PUT /api/profile body {name, firstDate, endDate|null, repeatRule: none|weekly|biweekly|monthly} is the wizard and Settings save; POST /api/people/import JSON {filename, text} or {filename, contentBase64} — never multipart; POST /api/people add; PUT /api/people/{id} edit (id only in path); DELETE /api/people/{id}; existing GET /api/people, GET /api/meetings, POST /api/meetings (kind extra), PUT /api/meetings/{id}/attendance/{personId}, GET /api/meetings/{id}/roster remain. Validation may be HTTP 400 or 422 unless an AC requires 409. Playwright: Chromium against BASE_URL; hashes #/ meeting list, #/settings Settings, #/people people, #/meeting/:id live roster; wizard is the first view when configured=false (overlay or #/setup). Assert Turkish product copy, not screens.md English. Synthetic PII only (@example.com, fictional names, sicil 10001+).",
+    "pass_fail_criteria": "A case passes when every step assertion holds. Profile/series rejects must leave group_profile and meetings unchanged (row counts and ids). Import rejects must leave people unchanged. Delete-cancel must leave person and attendance. Bind case fails if the process listens on 0.0.0.0 or requires a password. TC-22 (NFR-001) PASSES if the mark persists and the row updates; elapsed >1s is recorded as a WARNING not a FAIL unless the save hangs beyond 5s. The test item corresponding to a task passes when every case tracing that task's ACs passes. Do not treat BA Gherkin ids as executed unless the matching integration case passed.",
+    "suspension_resumption": "Suspend if python3 app.py cannot bind 127.0.0.1:8765, if tests would have to use the operator data/attendance.db, if the deliverable has no profile-save or people-write route (precondition-blocked, kind: env), or if any case writes into BASE/data. Resume when an isolated temp tree runs and the harness contract routes respond. Re-run TC-1, TC-9, TC-11, TC-17 as the foundation gate before the rest.",
+    "environmental_needs": "macOS/Linux, Python 3 stdlib, curl, sqlite3 CLI, git (for TC-30 against the real repo root, read-only). Playwright Chromium via npx --yes playwright install chromium (or python -m playwright). Network only for Playwright browser install; the app itself needs no egress. Writable /tmp for TEST_ROOT. Fixture recipe for a minimal first-sheet xlsx (stdlib zipfile+xml, no openpyxl) and a macro-ish xlsx (add xl/vbaProject.bin) live in TC-24/TC-27 test_data. Project root for git ls-files: /Users/cagri.gider/Documents/AI_Champions/attendance. Never commit test DBs or real rosters.",
+    "risks": [
+      "Route names are a harness contract — implementation may use POST /api/setup instead of PUT /api/profile. Contingency: qa-engineer substitutes documented paths and records them; cases are not skipped.",
+      "Wizard intercept DOM is unspecified (overlay vs #/setup). Contingency: assert via GET /api/meta configured=false PLUS UI that the meeting list is not the first screen (no meeting cards as the initial main view).",
+      "HTTP 400 vs 422 for date/import/people validation is unspecified except 409 for duplicate add. Contingency: accept 400 or 422; require 409 for TASK-1.2.3#AC2.",
+      "NFR-001 wall-clock is machine-dependent. Contingency: TC-22 is smoke/warning, not a suite gate (architect F-5).",
+      "Operator DB accident. Contingency: isolated TEST_ROOT; suspension if BASE/data would be opened.",
+      "Fifth-Wednesday monthly skip depends on ADR-0003 arithmetic. Contingency: dates in TC-4 are fixed; do not re-guess the rule.",
+      "Playwright file-input on wizard/Settings may need a real FileChooser. Contingency: API import (TC-16/TC-24) still certifies backend; UI cases fail only the UI AC if the picker is missing."
+    ]
+  },
+  "test_cases": [
+    {
+      "id": "TC-1",
+      "traces_to": ["TASK-1.1.1#AC1", "TASK-1.1.2#AC6", "TASK-1.1.2#AC14"],
+      "title": "Don't-repeat inserts only first_date and does not require end_date",
+      "setup": "Isolated TEST_ROOT (rsync project excluding data/*.db and seed/people.json). Empty data/. python3 app.py from TEST_ROOT. BASE_URL=http://127.0.0.1:8765. Confirm GET /api/meta configured is false (or equivalent).",
+      "technique": "curl",
+      "steps": [
+        "PUT $BASE_URL/api/profile with Content-Type application/json body {\"name\":\"Grup 5\",\"firstDate\":\"2026-09-09\",\"repeatRule\":\"none\"} — omit endDate (do not send a dummy end).",
+        "Assert HTTP 2xx.",
+        "GET $BASE_URL/api/meta — configured true, groupName is Grup 5.",
+        "GET $BASE_URL/api/meetings — exactly one meeting, date 2026-09-09.",
+        "Acceptance-layer equivalent: @TC-BE-003."
+      ],
+      "test_data": "Group name Grup 5 (fictional). firstDate 2026-09-09 (Wednesday). repeatRule none. No people.",
+      "expected_result": "Profile stored. Exactly one meeting on 2026-09-09. Save succeeds without an end date.",
+      "teardown": "SIGINT the server. rm -rf TEST_ROOT."
+    },
+    {
+      "id": "TC-2",
+      "traces_to": ["TASK-1.1.1#AC2", "TASK-1.1.2#AC7", "TASK-1.1.2#AC14"],
+      "title": "Weekly series inserts the weekday at 7-day steps through end_date",
+      "setup": "Fresh isolated TEST_ROOT empty DB. python3 app.py.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile {\"name\":\"Grup 5\",\"firstDate\":\"2026-09-09\",\"endDate\":\"2026-09-23\",\"repeatRule\":\"weekly\"}.",
+        "GET /api/meetings. Collect dates.",
+        "Assert dates are exactly 2026-09-09, 2026-09-16, 2026-09-23 (7-day steps). No other dates."
+      ],
+      "test_data": "first 2026-09-09, end 2026-09-23, weekly. Synthetic group name Grup 5.",
+      "expected_result": "Three series meetings on those Wednesdays only.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-3",
+      "traces_to": ["TASK-1.1.1#AC2", "TASK-1.1.2#AC7", "TASK-1.1.1#AC8", "TASK-1.1.2#AC14"],
+      "title": "Biweekly series matches the ADR example dates",
+      "setup": "Fresh isolated TEST_ROOT empty DB. python3 app.py.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile {\"name\":\"Grup 5\",\"firstDate\":\"2026-09-09\",\"endDate\":\"2026-10-07\",\"repeatRule\":\"biweekly\"}.",
+        "GET /api/meetings dates.",
+        "Assert meetings on 2026-09-09, 2026-09-23, and 2026-10-07.",
+        "Assert no meeting on 2026-09-16.",
+        "Acceptance-layer equivalent: @TC-BE-004."
+      ],
+      "test_data": "PLAN/ADR example: first 2026-09-09, end 2026-10-07, every 2 weeks.",
+      "expected_result": "Only the three biweekly Wednesdays; 2026-09-16 absent.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-4",
+      "traces_to": ["TASK-1.1.1#AC3", "TASK-1.1.2#AC7", "TASK-1.1.1#AC8", "TASK-1.1.2#AC14"],
+      "title": "Monthly uses weekday plus week-of-month ordinal and skips months with no such day",
+      "setup": "Two fresh isolated trees (or reset DB between substeps). python3 app.py each time.",
+      "technique": "curl",
+      "steps": [
+        "Ordinal happy path: PUT profile firstDate 2026-09-09 (2nd Wednesday, (9-1)//7+1=2), endDate 2026-11-11, repeatRule monthly. GET meetings.",
+        "Assert dates exactly 2026-09-09, 2026-10-14 (2nd Wednesday of October), 2026-11-11 (2nd Wednesday of November). No 2026-10-09 (calendar-day-of-month) and no weekly 2026-09-16.",
+        "Fifth-weekday skip: new empty DB. PUT firstDate 2026-09-30 (5th Wednesday), endDate 2026-12-31, monthly.",
+        "Assert meetings on 2026-09-30 and 2026-12-30 only (October and November 2026 have no fifth Wednesday). No dates outside firstDate..endDate."
+      ],
+      "test_data": "ADR-0003: ordinal (day-1)//7+1. 2026-09-09=2nd Wed; 2026-09-30=5th Wed. Synthetic name Grup 5.",
+      "expected_result": "Second-Wednesday series hits Sep 9, Oct 14, Nov 11. Fifth-Wednesday series skips Oct and Nov, keeps Sep 30 and Dec 30.",
+      "teardown": "Stop servers. Delete TEST_ROOT(s)."
+    },
+    {
+      "id": "TC-5",
+      "traces_to": ["TASK-1.1.1#AC4", "TASK-1.1.2#AC14"],
+      "title": "Fill-gaps inserts only missing ISO dates; existing meeting and marks unchanged; no UNIQUE(date)",
+      "setup": "Isolated TEST_ROOT. Create configured profile with don't-repeat 2026-09-09. POST /api/meetings extra on 2026-09-23 titled Extra 23. POST /api/people {id:\"10001\",name:\"Jane Doe\"}. PUT attendance present for 10001 on that extra. sqlite3: record extra id, attendance row, and PRAGMA/index/schema of meetings.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile extending to endDate 2026-10-07 repeatRule biweekly firstDate 2026-09-09 (Settings/fill-gaps path).",
+        "GET /api/meetings: 2026-09-09 exists; 2026-09-23 still the same extra id/title/kind; 2026-10-07 newly inserted; no second row replacing 2026-09-23.",
+        "GET roster/attendance for the extra: Jane Doe still present.",
+        "POST /api/meetings another extra on 2026-09-23 (same ISO date). Assert 2xx and two meetings share 2026-09-23 — UNIQUE(date) was not added.",
+        "sqlite3 .schema meetings: no UNIQUE constraint on date.",
+        "Acceptance-layer equivalent: @TC-BE-006."
+      ],
+      "test_data": "Jane Doe / sicil 10001 / jane.doe@example.com (email optional). Extra on 2026-09-23 with status present.",
+      "expected_result": "Existing 2026-09-23 meeting and its mark unchanged; missing biweekly dates inserted; two meetings may share a date; schema has no UNIQUE(date).",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-6",
+      "traces_to": ["TASK-1.1.1#AC5", "TASK-1.2.1#AC2", "TASK-1.1.2#AC14"],
+      "title": "Shortening end_date never deletes meetings or attendance (including extras)",
+      "setup": "Isolated TEST_ROOT. Profile weekly 2026-09-09..2026-10-07. POST two extra meetings (e.g. 2026-09-10 Extra A, 2026-09-17 Extra B). Add Jane Doe 10001; mark present on Extra A. Snapshot meeting ids and attendance.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile same firstDate, repeatRule weekly, endDate 2026-09-09 (shorter).",
+        "Assert 2xx.",
+        "GET /api/meetings: every previously existing id still present, including both extras and series rows after the new end date.",
+        "Attendance on Extra A still present for 10001.",
+        "Acceptance-layer equivalent: @TC-FE-006 (API counterpart; UI listed in TC-18)."
+      ],
+      "test_data": "Jane Doe 10001. Two extras Extra A / Extra B.",
+      "expected_result": "No meeting or attendance row removed. Fill-gaps does not DELETE/REPLACE.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-7",
+      "traces_to": ["TASK-1.1.1#AC6", "TASK-1.1.2#AC8", "TASK-1.1.2#AC14"],
+      "title": "end_date before first_date is rejected; no profile and no meetings written",
+      "setup": "Fresh empty isolated TEST_ROOT. python3 app.py. Snapshot: sqlite3 count group_profile (0) and meetings (0).",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile {\"name\":\"Grup 5\",\"firstDate\":\"2026-09-09\",\"endDate\":\"2026-09-01\",\"repeatRule\":\"weekly\"}.",
+        "Assert HTTP 400 or 422 (not 2xx).",
+        "GET /api/meta: configured is still false / no groupName Grup 5.",
+        "GET /api/meetings: still empty.",
+        "sqlite3: still zero group_profile rows (or no table yet, but no Grup 5 profile).",
+        "Acceptance-layer equivalent: @TC-BE-005."
+      ],
+      "test_data": "first 2026-09-09, end 2026-09-01, weekly.",
+      "expected_result": "Save rejected. No profile stored. No meetings created. No other series writes.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-8",
+      "traces_to": ["TASK-1.1.1#AC7", "TASK-1.1.2#AC14"],
+      "title": "Generated meetings have kind series; user extras stay extra",
+      "setup": "Empty isolated TEST_ROOT. python3 app.py.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile don't-repeat firstDate 2026-09-09 name Grup 5.",
+        "GET /api/meetings: the 2026-09-09 row has kind series.",
+        "POST /api/meetings {\"title\":\"Ekstra\",\"date\":\"2026-09-10\",\"notes\":\"\"}.",
+        "GET /api/meetings: Ekstra has kind extra; the series row is still series."
+      ],
+      "test_data": "Grup 5; extra title Ekstra on 2026-09-10.",
+      "expected_result": "Generator writes kind=series. POST /api/meetings remains kind=extra.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-9",
+      "traces_to": ["TASK-1.1.2#AC1", "TASK-1.1.2#AC13"],
+      "title": "Empty database opens the first-run wizard, not the meeting list",
+      "setup": "Empty isolated TEST_ROOT (no people, no meetings, no profile). python3 app.py. Playwright Chromium.",
+      "technique": "playwright-cli",
+      "steps": [
+        "GET /api/meta: configured false; GET /api/meetings empty; GET /api/people empty. Acceptance-layer @TC-BE-001.",
+        "Navigate to http://127.0.0.1:8765/ (or #/). Snapshot main.",
+        "Assert the first-run wizard is visible (group name + first date + repeat controls).",
+        "Assert the meeting list is not the first screen (no meeting cards / add-meeting form as the initial main view).",
+        "Follow Toplantılar: click the Toplantılar nav control and navigate to hash #/. Assert the wizard remains the only product surface (meeting list does not operate).",
+        "Follow Kişiler: click the Kişiler nav control and navigate to hash #/people. Assert the wizard remains the only product surface (people write UI does not operate).",
+        "Navigate to #/settings and #/meeting/1 (or any meeting id). Assert those hashes do not operate; wizard still shown.",
+        "GET /api/meta: configured is still false.",
+        "Acceptance-layer equivalent: @TC-FE-001."
+      ],
+      "test_data": "Empty DB. No seed/people.json.",
+      "expected_result": "Wizard first. Meeting list not first. Meta unconfigured. Toplantılar/Kişiler nav and hashes cannot leave the wizard while unconfigured.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-10",
+      "traces_to": ["TASK-1.1.2#AC2"],
+      "title": "WHILE a group profile exists the wizard is not shown",
+      "setup": "Isolated TEST_ROOT. Complete TC-1 save (or PUT profile don't-repeat). Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "GET /api/meta: configured true.",
+        "Open http://127.0.0.1:8765/. Assert meeting list (Toplantılar) is shown.",
+        "Assert first-run wizard is not shown.",
+        "Acceptance-layer: @TC-BE-002, @TC-FE-002."
+      ],
+      "test_data": "Saved profile Grup 5 / 2026-09-09 / none.",
+      "expected_result": "Meeting list. No wizard.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-11",
+      "traces_to": ["TASK-1.1.2#AC3", "TASK-1.1.2#AC14"],
+      "title": "Meetings without a profile get a default upgrade insert and skip the wizard without generating series",
+      "setup": "Isolated TEST_ROOT. Before starting the app, create data/attendance.db with people+meetings+attendance only (no group_profile): Jane Doe 10001; meeting id 1 date 2026-08-12 kind extra title Eski; attendance present. Do not insert group_profile. Then python3 app.py (init must run). Playwright + curl.",
+      "technique": "curl",
+      "steps": [
+        "After startup, sqlite3: exactly one group_profile row. name empty or Yoklama. first_date = 2026-08-12 (earliest meeting). end_date null/empty. repeat_rule none.",
+        "GET /api/meetings: still exactly the original meeting(s); no new series dates inserted.",
+        "Attendance for 10001 on meeting 1 still present.",
+        "GET /api/meta: configured true.",
+        "Open the SPA: meeting list, not wizard (spot-check with Playwright or curl+HTML is not enough — use Playwright navigation).",
+        "This must not use the operator Grup 8 file; the fixture is synthetic."
+      ],
+      "test_data": "Synthetic operator-like DB: Jane Doe 10001, one extra meeting 2026-08-12, one present mark. No profile row before init.",
+      "expected_result": "Default singleton inserted. No series generation. Wizard off. Existing meetings and marks intact. ADR-0001.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-12",
+      "traces_to": ["TASK-1.1.2#AC4"],
+      "title": "Seeding people from local seed/people.json does not skip the wizard",
+      "setup": "Isolated TEST_ROOT with empty data/ but seed/people.json containing one synthetic person (Ada Lovelace, id 10099, ada.lovelace@example.com). No meetings. python3 app.py. Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "GET /api/people: Ada Lovelace 10099 is present (seed ran because people was empty).",
+        "GET /api/meta: configured false (people-only seed ≠ configured).",
+        "GET /api/meetings: empty.",
+        "Open SPA: wizard is shown, not the meeting list."
+      ],
+      "test_data": "seed/people.json: [{\"id\":\"10099\",\"name\":\"Ada Lovelace\",\"position\":\"\",\"center\":\"\",\"email\":\"ada.lovelace@example.com\"}]. Never a real roster.",
+      "expected_result": "People seeded; wizard still required; no profile.",
+      "teardown": "Stop server. Delete TEST_ROOT including the temp seed file."
+    },
+    {
+      "id": "TC-13",
+      "traces_to": ["TASK-1.1.2#AC5"],
+      "title": "GroupProfile is a SQLite singleton in attendance.db; schema changes are additive",
+      "setup": "Isolated TEST_ROOT. Complete a valid don't-repeat save. Keep sqlite3 and the tree available. Also copy a second pre-populated meetings DB (synthetic) aside to prove start does not DROP/reseed.",
+      "technique": "curl",
+      "steps": [
+        "After save, ls TEST_ROOT/data: attendance.db exists. Assert no sidecar group.json / profile.json next to the DB (or anywhere under data/ except sqlite files).",
+        "sqlite3: SELECT count(*) FROM group_profile; expect 1. Table lives in attendance.db.",
+        "grep -n DROP TABLE app.py (and migrate helpers): no DROP TABLE of people, meetings, attendance, or group_profile on startup.",
+        "NFR-004 / @TC-BE-015: stop server; note meeting ids; start again; same ids and marks remain (no reseed of meetings).",
+        "git -C BASE grep is optional; this case inspects the running deliverable."
+      ],
+      "test_data": "Profile from TC-1 shape. Synthetic DB only.",
+      "expected_result": "Singleton in SQLite, not sidecar. Additive CREATE TABLE IF NOT EXISTS only. Restart does not wipe meetings/marks.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-14",
+      "traces_to": ["TASK-1.1.2#AC12", "TASK-1.1.2#AC8"],
+      "title": "Wizard labels are Turkish; don't-repeat hides end date; inverted dates stay on the wizard",
+      "setup": "Empty isolated TEST_ROOT. python3 app.py. Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open app. Wizard visible.",
+        "Assert html lang=tr or labels are Turkish. Fail if English spec strings are used as visible labels: \"Save and continue\", \"don't repeat\", \"first date\", \"group name\", \"end date\".",
+        "Select don't-repeat (Turkish option). Assert the end-date field is hidden/not required. Acceptance-layer @TC-FE-003.",
+        "Select a repeating rule. Set first date 2026-09-09, end date 2026-09-01, save.",
+        "Assert an error is shown and the meeting list is not opened. GET /api/meta still unconfigured. Acceptance-layer @TC-FE-004.",
+        "Acceptance-layer Turkish: @TC-FE-013 (wizard half)."
+      ],
+      "test_data": "Empty wizard. Inverted dates 2026-09-09 / 2026-09-01.",
+      "expected_result": "Turkish copy. End date hidden on don't-repeat. Date error keeps the champion on the wizard with no profile.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-15",
+      "traces_to": ["TASK-1.1.2#AC9", "TASK-1.2.3#AC5"],
+      "title": "Wizard with zero people persists profile and meetings; empty people list is valid",
+      "setup": "Empty isolated TEST_ROOT, no seed/people.json. python3 app.py. Playwright + curl.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Complete wizard: name Grup 5, first 2026-09-09, don't-repeat, skip import / no file.",
+        "GET /api/meta configured true. GET /api/meetings one row on 2026-09-09. GET /api/people [].",
+        "Open People (Kişiler). Assert empty list is shown as a valid state, not an error crash.",
+        "Acceptance-layer: @TC-BE-007, @TC-FE-008."
+      ],
+      "test_data": "No roster file. Grup 5.",
+      "expected_result": "Profile+meeting persist. People empty. Empty list allowed.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-16",
+      "traces_to": ["TASK-1.1.2#AC10", "TASK-1.2.2#AC6", "TASK-1.1.2#AC14", "TASK-1.2.2#AC8"],
+      "title": "Rejected import does not roll back an already-saved profile or meetings",
+      "setup": "Empty isolated TEST_ROOT. python3 app.py.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile don't-repeat Grup 5 / 2026-09-09. Assert one meeting.",
+        "POST /api/people/import with JSON {filename:\"bad.csv\", text:\"sicil,name\\n10001,\\n\"} (row missing name) OR a file with a row lacking id.",
+        "Assert import is 400 or 422 (not 2xx).",
+        "GET /api/meta still Grup 5 configured. GET /api/meetings still the first-date meeting. GET /api/people still [].",
+        "Two transactions: profile save already committed."
+      ],
+      "test_data": "CSV text with header sicil,name and row 10001 with empty name. RFC4180 UTF-8.",
+      "expected_result": "Import rejected. Profile and meetings unchanged. Architect F-8.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-17",
+      "traces_to": ["TASK-1.1.2#AC11", "TASK-1.1.2#AC14"],
+      "title": "App accepts 127.0.0.1 and does not listen on 0.0.0.0; no password",
+      "setup": "Isolated TEST_ROOT. python3 app.py. No Authorization headers used anywhere.",
+      "technique": "curl",
+      "steps": [
+        "curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8765/ — 200 without auth.",
+        "curl -sS --connect-timeout 2 http://127.0.0.1:8765/api/meta — JSON, no WWW-Authenticate, no login form.",
+        "lsof -nP -iTCP:8765 -sTCP:LISTEN (or netstat): address is 127.0.0.1, not *:8765 / 0.0.0.0.",
+        "Optional negative: curl --connect-timeout 2 http://192.0.2.1:8765/ must not succeed via this process (do not use a real routable probe against production). Binding evidence from lsof is sufficient.",
+        "Acceptance-layer: @TC-BE-014."
+      ],
+      "test_data": "None. Loopback only.",
+      "expected_result": "Listen 127.0.0.1:8765. No password. NFR-002 bind half.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-18",
+      "traces_to": ["TASK-1.2.1#AC1", "TASK-1.1.1#AC8", "TASK-1.2.1#AC8"],
+      "title": "Settings changes name and series with the same fill-gaps and end-date reject as first-run",
+      "setup": "Isolated TEST_ROOT. PUT profile don't-repeat Grup 5 / 2026-09-09. Playwright + curl.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open meeting list. Open Settings (Turkish control, not the English word Settings as the only label).",
+        "Assert #settings-import (or the documented Settings import host) exists and is empty — no roster file control filled in; this Settings task does not implement import.",
+        "Change name to Grup 7, firstDate 2026-09-09, endDate 2026-10-07, repeat every 2 weeks. Save.",
+        "GET /api/meetings dates include 2026-09-09, 2026-09-23, 2026-10-07 (fill-gaps; same dates as first-run TC-3). GET /api/meta groupName Grup 7.",
+        "In Settings set endDate 2026-09-01 (before first) and save. Assert error; GET /api/meetings dates unchanged (same as TC-7 rule). No deletes.",
+        "API twin: PUT /api/profile with inverted dates on a configured install returns 400/422 and does not delete meetings."
+      ],
+      "test_data": "Rename Grup 5 → Grup 7. Biweekly 2026-09-09..2026-10-07 then inverted end 2026-09-01.",
+      "expected_result": "Settings uses the same shared fill-gaps function and reject rules as first-run. Empty #settings-import host present. FR-007 series portion.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-19",
+      "traces_to": ["TASK-1.2.1#AC3"],
+      "title": "Meeting-list header shows the saved group name",
+      "setup": "Isolated TEST_ROOT. Profile name Grup 5. Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open #/ meeting list.",
+        "Assert the header brand/strong (or equivalent header text) shows Grup 5, not only the hardcoded Yoklama if a name is saved.",
+        "Acceptance-layer: @TC-FE-005."
+      ],
+      "test_data": "groupName Grup 5.",
+      "expected_result": "Header displays Grup 5. FR-019.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-20",
+      "traces_to": ["TASK-1.2.1#AC4", "TASK-1.2.1#AC8"],
+      "title": "Configured install shows meeting list with Settings and People; extra meeting CUD still works",
+      "setup": "Configured isolated TEST_ROOT (don't-repeat). Playwright + curl.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open app: meeting list, not wizard. Controls to open Settings and Kişiler exist.",
+        "Open Settings: #settings-import host exists and is empty (import not implemented on this task).",
+        "POST /api/meetings {title:\"Ekstra CUD\", date:\"2026-09-12\"} — 201, kind extra.",
+        "PUT /api/meetings/{id} change title to Ekstra CUD 2 — 200.",
+        "DELETE /api/meetings/{id} — 200. GET /api/meetings no longer contains that id.",
+        "UI: add-meeting form on the list still creates an extra (spot-check once)."
+      ],
+      "test_data": "Extra date 2026-09-12. Synthetic titles.",
+      "expected_result": "Configured chrome + extra CUD as today. Wizard absent. Empty Settings import host present.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-21",
+      "traces_to": ["TASK-1.2.1#AC5"],
+      "title": "Live tick, tags, notes, and copyable summaries still work; attendance write path is not rewritten",
+      "setup": "Configured TEST_ROOT. People Jane Doe 10001. One meeting. Playwright. Keep app.py available.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open live roster #/meeting/{id}. Tap Katıldı for Jane Doe. Assert row shows joined (Katıldı / aria-pressed). GET attendance status present (or joined family). Acceptance-layer @TC-FE-012.",
+        "Tap Gelmedi. Assert absent.",
+        "Set a tag (e.g. Soru sordu / question) and a short note. Reload. Tag and note persist.",
+        "If activity/status extras (sessiz/konuştu/katkı) exist, set one; persist.",
+        "Open person report and meeting report; copy-summary controls still produce clipboard text (or expose .summary). Existing copy buttons remain.",
+        "Inspect app.py: PUT /api/meetings/{id}/attendance/{personId} still single-row UPSERT (INSERT ... ON CONFLICT DO UPDATE). Fail if live tick was replaced by a bulk rewrite-only API with this route removed."
+      ],
+      "test_data": "Jane Doe 10001. Note 'deneme notu'. Tag question.",
+      "expected_result": "Live tick UX and write handler remain. FR-017.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-22",
+      "traces_to": ["TASK-1.2.1#AC6"],
+      "title": "Smoke: one attendance mark on a roster of at most 80 people persists (NFR-001, non-gating)",
+      "setup": "Isolated TEST_ROOT. Configured meeting. POST 80 synthetic people ids 10100–10179 names Test User 00..79, emails test.user.NN@example.com. Playwright or curl. Do not treat wall-clock as a suite gate.",
+      "technique": "curl",
+      "steps": [
+        "Time a single PUT /api/meetings/{id}/attendance/10100 {\"status\":\"present\"} and a following GET roster that shows 10100 joined.",
+        "Assert persist + row update succeeded.",
+        "Record elapsed milliseconds. If elapsed ≤1000ms, note PASS smoke. If 1000ms < elapsed ≤5000ms, PASS with WARNING (NFR-001 miss, not a flaky gate). If elapsed >5000ms or request hangs, FAIL (hang, not a timing flake).",
+        "Do not loop this into CI as a hard 1s assertion."
+      ],
+      "test_data": "80 fictional people Test User NN @example.com. One mark on 10100.",
+      "expected_result": "Mark persists and the row updates. Timing is observational except hang >5s.",
+      "teardown": "Stop server. Delete TEST_ROOT.",
+      "tags": ["smoke", "manual"]
+    },
+    {
+      "id": "TC-23",
+      "traces_to": ["TASK-1.2.1#AC7"],
+      "title": "Settings labels are in Turkish",
+      "setup": "Configured isolated TEST_ROOT. Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open Settings.",
+        "Assert visible labels are Turkish, consistent with the existing UI (lang=tr, Toplantılar/Kişiler style).",
+        "Fail if Settings is labeled only with spec-English: Group name, First date, Repeat rule, End date, Save series (as the sole visible copy).",
+        "Acceptance-layer: @TC-FE-013 (Settings half)."
+      ],
+      "test_data": "None beyond configured Grup 5.",
+      "expected_result": "Settings copy is Turkish. NFR-003.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-24",
+      "traces_to": ["TASK-1.2.2#AC1", "TASK-1.2.2#AC8"],
+      "title": "Valid CSV, people.json, and simple xlsx upsert by sicil and do not delete absentees",
+      "setup": "Configured isolated TEST_ROOT. POST people 10001 Old Name and 10002 Keep Me. python3 app.py.",
+      "technique": "curl",
+      "steps": [
+        "CSV: POST /api/people/import {filename:\"roster.csv\", text:\"sicil,name\\n10001,New Name\\n\"}. Assert 2xx. GET /api/people: 10001 name New Name; 10002 still exists.",
+        "JSON: POST import {filename:\"people.json\", text:\"[{\\\"id\\\":\\\"10001\\\",\\\"name\\\":\\\"JSON Name\\\"}]\"}. 10001 becomes JSON Name; 10002 remains.",
+        "XLSX: build a minimal first-sheet workbook with stdlib zipfile+xml (shared string or inline): headers sicil,name; one data row 10001, Xlsx Name. POST {filename:\"roster.xlsx\", contentBase64:<bytes>}. 10001 Xlsx Name; 10002 remains.",
+        "Never send multipart/form-data.",
+        "Acceptance-layer: @TC-BE-008."
+      ],
+      "test_data": "People 10001 Old Name, 10002 Keep Me (fictional). CSV/JSON/xlsx contain only 10001 updates. No real corporate names.",
+      "expected_result": "Upsert by id. Absentees not deleted. All three formats work.",
+      "teardown": "Stop server. Delete TEST_ROOT and any generated xlsx bytes."
+    },
+    {
+      "id": "TC-25",
+      "traces_to": ["TASK-1.2.2#AC2", "TASK-1.2.2#AC8"],
+      "title": "Any row missing sicil/id or name rejects the whole file; UI explains; people unchanged",
+      "setup": "Configured TEST_ROOT with 10001 Jane Doe. curl + Playwright.",
+      "technique": "curl",
+      "steps": [
+        "POST import CSV with two rows: valid 10003 Ada Lovelace; invalid row missing name (10004 empty). Assert 400/422. GET /api/people: 10001 unchanged; 10003 not added.",
+        "POST import JSON array with one object {id:\"10005\"} without name — same reject, no writes.",
+        "Playwright: on Settings (or wizard) select the bad CSV via file input; import. Assert an error message is visible. People list unchanged. Acceptance-layer @TC-BE-009, @TC-FE-007."
+      ],
+      "test_data": "Jane Doe 10001. Bad CSV includes a nameless row. Ada Lovelace 10003 must not be inserted.",
+      "expected_result": "All-or-nothing. UI explains. FR-010.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-26",
+      "traces_to": ["TASK-1.2.2#AC3", "TASK-1.2.2#AC8"],
+      "title": "Import is stdlib-only JSON body, not multipart; no requirements.txt for this path",
+      "setup": "Deliverable tree at TEST_ROOT (copy of source). Configured app running.",
+      "technique": "curl",
+      "steps": [
+        "Assert no requirements.txt in the project root (or it does not add openpyxl/pandas for import). grep import openpyxl, pandas, xlrd in *.py — none on the import path.",
+        "POST /api/people/import with Content-Type application/json and {filename,text} — 2xx on a valid one-row CSV.",
+        "POST the same file as multipart/form-data file field — must not be the supported path: either 400/415/404 or ignored; a successful multipart-only implementation FAILS this AC (ADR-0002).",
+        "Client contract: SPA reads the file and POSTs JSON, not multipart."
+      ],
+      "test_data": "Valid one-row CSV sicil,name / 10099,Ada Lovelace.",
+      "expected_result": "Stdlib CSV/JSON/xlsx zip+xml. JSON body. No pip package. ADR-0002.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-27",
+      "traces_to": ["TASK-1.2.2#AC4", "TASK-1.2.2#AC8"],
+      "title": "Exotic xlsx (macros, multiple header rows, password-like encryption) is rejected with CSV guidance",
+      "setup": "Configured isolated TEST_ROOT with 10001 Jane Doe.",
+      "technique": "curl",
+      "steps": [
+        "Macro-ish: minimal xlsx zip plus xl/vbaProject.bin dummy. POST contentBase64. Assert 400/422. Error body/UI text tells the champion to save as CSV (Turkish or clearly CSV). People unchanged.",
+        "Multiple header rows: sheet row1 garbage, row2 sicil,name, row3 10006,Other. POST. Whole file rejected; 10006 not added.",
+        "Encrypted package: zip containing EncryptedPackage + EncryptionInfo (OOXML encrypted stub, not a real password of a person). POST. Rejected with CSV guidance. People unchanged."
+      ],
+      "test_data": "Synthetic workbooks only. Jane Doe 10001 must remain the only person if she was the only one.",
+      "expected_result": "Fail closed toward CSV. No partial import.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-28",
+      "traces_to": ["TASK-1.2.2#AC5", "TASK-1.2.2#AC8"],
+      "title": "Numeric xlsx sicil stored without trailing .0; CSV UTF-8 BOM is tolerated",
+      "setup": "Configured empty-people or known people TEST_ROOT.",
+      "technique": "curl",
+      "steps": [
+        "XLSX cell type numeric 10001.0 for sicil plus name Jane Doe. Import. GET /api/people: id is \"10001\" not \"10001.0\".",
+        "CSV with UTF-8 BOM: bytes EF BB BF then sicil,name\\n10002,John Q. Public\\n. Import 2xx. Person 10002 exists."
+      ],
+      "test_data": "Jane Doe 10001; John Q. Public 10002. BOM CSV.",
+      "expected_result": "String sicil without .0. BOM tolerated.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-29",
+      "traces_to": ["TASK-1.2.2#AC6"],
+      "title": "Optional wizard import and Settings import both use the same upsert behavior",
+      "setup": "Two isolated runs. Playwright file inputs. Valid CSV 10001 Ada Lovelace.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Run A — wizard: empty DB, fill group/series don't-repeat, attach valid CSV, save. People contains 10001. Profile saved.",
+        "Run B — Settings: configured empty people, open Settings, import the same CSV. People contains 10001.",
+        "Run C — wizard: save profile first (or same submit), then invalid file: profile remains (cross-check TC-16). Error shown."
+      ],
+      "test_data": "Ada Lovelace 10001 ada.lovelace@example.com. Valid CSV sicil,name.",
+      "expected_result": "Both screens share import behavior. Rejected import does not undo profile.",
+      "teardown": "Close browser. Stop servers. Delete TEST_ROOTs."
+    },
+    {
+      "id": "TC-30",
+      "traces_to": ["TASK-1.2.2#AC7"],
+      "title": "README names the column contract; git-tracked tree omits data/*.db and real seed/people.json",
+      "setup": "Read-only against the real repo BASE=/Users/cagri.gider/Documents/AI_Champions/attendance (not TEST_ROOT). No server required. Do not open operator DB.",
+      "technique": "integration",
+      "steps": [
+        "git -C BASE ls-files: assert seed/people.json is not tracked; assert no data/*.db tracked. seed/people.example.json may be tracked (synthetic).",
+        "Read README.md: required columns sicil or id, and name; optional position and center/yetkinlik; Excel means a simple first sheet.",
+        "Acceptance-layer: @TC-BE-016. Related @TC-BE-015 is restart/additive (TC-13), not git ls-files."
+      ],
+      "test_data": "None. Repo as shared.",
+      "expected_result": "PII off git. README field contract present. FR-016 / NFR-002 git half.",
+      "teardown": "None — read-only."
+    },
+    {
+      "id": "TC-31",
+      "traces_to": ["TASK-1.2.3#AC1", "TASK-1.2.3#AC8"],
+      "title": "Add person with sicil and name succeeds; missing sicil or name creates no person",
+      "setup": "Configured isolated TEST_ROOT. curl + Playwright.",
+      "technique": "curl",
+      "steps": [
+        "POST /api/people {\"id\":\"10099\",\"name\":\"Ada Lovelace\",\"email\":\"ada.lovelace@example.com\"}. 2xx. GET /api/people contains 10099. Acceptance-layer @TC-BE-010.",
+        "POST /api/people {\"id\":\"10100\",\"name\":\"\"}. 400 or 422. No person 10100. @TC-BE-013.",
+        "POST /api/people {\"name\":\"No Id\"} without id. 400/422. No extra person.",
+        "Playwright add form: save with empty name — validation shown, person not created. @TC-FE-009."
+      ],
+      "test_data": "Ada Lovelace 10099 ada.lovelace@example.com.",
+      "expected_result": "Valid add works. Missing id or name rejected with validation. FR-011/FR-014.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-32",
+      "traces_to": ["TASK-1.2.3#AC2", "TASK-1.2.3#AC8"],
+      "title": "Adding a duplicate sicil/id returns 409 and does not silently overwrite",
+      "setup": "Configured TEST_ROOT. Person 10001 Jane Doe position Dev center QA.",
+      "technique": "curl",
+      "steps": [
+        "POST /api/people {\"id\":\"10001\",\"name\":\"Other Name\",\"position\":\"X\"}.",
+        "Assert HTTP 409.",
+        "GET /api/people/ or list: 10001 still Jane Doe, position Dev, center QA — not Other Name.",
+        "Architect F-6: no silent overwrite on add."
+      ],
+      "test_data": "Existing Jane Doe 10001. Duplicate add Other Name.",
+      "expected_result": "409 conflict. Existing row unchanged.",
+      "teardown": "Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-33",
+      "traces_to": ["TASK-1.2.3#AC3", "TASK-1.2.3#AC8"],
+      "title": "Edit changes name/position/center (email optional); sicil is immutable and disabled in the UI",
+      "setup": "Configured TEST_ROOT. Person 10001 Jane Doe. curl + Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "PUT /api/people/10001 {\"name\":\"Jane Q. Doe\",\"position\":\"QA Engineer\",\"center\":\"QA\",\"email\":\"jane.doe@example.com\"}. 2xx. GET person: new name/position/center/email; id still 10001.",
+        "PUT /api/people/10001 with a body that includes \"id\":\"10002\" (if accepted at all): id remains 10001. @TC-BE-011.",
+        "Playwright edit form: sicil/id control is disabled. @TC-FE-010."
+      ],
+      "test_data": "Jane Q. Doe / QA Engineer / QA / jane.doe@example.com.",
+      "expected_result": "Editable fields update. Sicil locked. FR-012.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-34",
+      "traces_to": ["TASK-1.2.3#AC4", "TASK-1.2.3#AC8"],
+      "title": "Confirm delete removes person and attendance; cancel leaves data; warning mentions attendance",
+      "setup": "Configured TEST_ROOT. Jane Doe 10001 with present mark on a meeting. Playwright + curl.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open delete confirm. Assert warning states that attendance / yoklama marks will be removed. Do not confirm yet.",
+        "Cancel. GET people still 10001. GET attendance still has the mark. @TC-FE-011 cancel half.",
+        "Confirm delete (UI) or DELETE /api/people/10001. Person gone. Meeting has no attendance row for 10001 (CASCADE). @TC-BE-012, @TC-FE-011 confirm half."
+      ],
+      "test_data": "Jane Doe 10001 with one present attendance row.",
+      "expected_result": "Cancel is non-destructive. Confirm cascades. FR-013. Irreversible by design.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-35",
+      "traces_to": ["TASK-1.2.3#AC5"],
+      "title": "Empty people list is a valid UI and API state",
+      "setup": "Configured TEST_ROOT, zero people (wizard skip import). Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "GET /api/people returns [].",
+        "Open Kişiler: empty state, not an unhandled error. Add control still available."
+      ],
+      "test_data": "Empty roster.",
+      "expected_result": "Empty list is valid (also covered with wizard in TC-15; this case is people-surface specific).",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-36",
+      "traces_to": ["TASK-1.2.3#AC6"],
+      "title": "Position and center show on the person row or report and on the live roster when present",
+      "setup": "Configured TEST_ROOT. POST 10001 Jane Doe position QA Engineer center QA. Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "People list row or person report shows QA Engineer and/or QA.",
+        "Live roster row shows center/position QA / QA Engineer.",
+        "Acceptance-layer: @TC-FE-014 (center on live roster)."
+      ],
+      "test_data": "Jane Doe 10001, position QA Engineer, center QA. No real org names.",
+      "expected_result": "FR-018: position/center visible where present.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-37",
+      "traces_to": ["TASK-1.2.3#AC7"],
+      "title": "People add/edit/delete copy is in Turkish",
+      "setup": "Configured TEST_ROOT. Playwright.",
+      "technique": "playwright-cli",
+      "steps": [
+        "Open add form, edit form, delete confirm.",
+        "Assert Turkish copy (e.g. Kaydet, İptal, Sil, Sicil/Ad consistent with existing UI).",
+        "Fail if forms are spec-English only: Add person, Delete person, Save, Cancel as the sole labels."
+      ],
+      "test_data": "Any synthetic person for edit/delete chrome.",
+      "expected_result": "People write UI is Turkish. NFR-003.",
+      "teardown": "Close browser. Stop server. Delete TEST_ROOT."
+    },
+    {
+      "id": "TC-38",
+      "traces_to": ["TASK-1.1.2#AC6", "TASK-1.2.2#AC2", "TASK-1.2.3#AC1", "TASK-1.1.2#AC14", "TASK-1.2.2#AC8", "TASK-1.2.3#AC8"],
+      "title": "Malformed JSON bodies yield 400 on profile, import, and people POST (hygiene)",
+      "setup": "Configured isolated TEST_ROOT (don't-repeat already saved so people POST is reachable). python3 app.py.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/profile with body '{not json' Content-Type application/json — expect 400 invalid_json (existing Handler pattern).",
+        "POST /api/people/import with body '{not json' — 400.",
+        "POST /api/people with body '{not json' — 400.",
+        "Assert JSON error objects, not an HTML stack trace containing local file paths to people names."
+      ],
+      "test_data": "Broken JSON '{not json'.",
+      "expected_result": "400 malformed at the transport layer. No writes.",
+      "teardown": "Stop server. Delete TEST_ROOT.",
+      "tags": ["hygiene", "above-FRD"]
+    },
+    {
+      "id": "TC-39",
+      "traces_to": ["TASK-1.2.3#AC3", "TASK-1.2.3#AC4", "TASK-1.2.3#AC8"],
+      "title": "PUT/DELETE unknown person id returns 404 (hygiene)",
+      "setup": "Configured TEST_ROOT. No person 19999.",
+      "technique": "curl",
+      "steps": [
+        "PUT /api/people/19999 {\"name\":\"Ghost\"} — 404.",
+        "DELETE /api/people/19999 — 404.",
+        "GET /api/people unchanged."
+      ],
+      "test_data": "Unknown id 19999.",
+      "expected_result": "404 not-found. No phantom upsert on PUT.",
+      "teardown": "Stop server. Delete TEST_ROOT.",
+      "tags": ["hygiene", "above-FRD"]
+    }
+  ],
+  "excluded_coverage": [
+    {
+      "excluded": "BA Gherkin @TC-BE-001 empty database has no group profile (acceptance layer)",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "docs/analysis/yoklama-setup/test/testcases-yoklama-setup.en.md @TC-BE-001; executed here as TC-9"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-002 existing profile is not first-run",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-002; executed here as TC-10"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-003 don't-repeat first date",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-003; executed here as TC-1"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-004 biweekly dates",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-004; executed here as TC-3"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-005 end before first rejected",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-005; executed here as TC-7"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-006 skip dates that already have a meeting",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-006; executed here as TC-5"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-007 profile saves with empty roster",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-007; executed here as TC-15"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-008 import upsert does not delete extra people",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-008; executed here as TC-24"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-009 import invalid row changes nothing",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-009; executed here as TC-25"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-010 add person",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-010; executed here as TC-31"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-011 edit cannot change sicil",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-011; executed here as TC-33"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-012 delete removes attendance",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-012; executed here as TC-34"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-013 add without name rejected",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-013; executed here as TC-31"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-014 listens only on localhost",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-014; executed here as TC-17"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-015 existing database survives app file update",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-015; executed here as TC-13 (restart/additive migrate; git pull does not touch gitignored DB)"
+    },
+    {
+      "excluded": "BA Gherkin @TC-BE-016 tracked tree omits real roster and database",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "testcases-yoklama-setup.en.md @TC-BE-016; executed here as TC-30"
+    },
+    {
+      "excluded": "BA Gherkin @TC-FE-001..014 as a separately numbered FE suite",
+      "reason": "already-covered-by-existing-asset",
+      "covered_by": "docs/analysis/yoklama-setup/test/testcases-yoklama-setup.en.md section 2; mapped to TC-9, TC-10, TC-14, TC-19, TC-6/TC-18, TC-25, TC-15, TC-31, TC-33, TC-34, TC-21, TC-14/TC-23, TC-36"
+    },
+    {
+      "excluded": "401 unauthenticated on all yoklama-setup operations (profile, import, people, meta, meetings, attendance)",
+      "reason": "not-applicable",
+      "covered_by": "N/A — NFR-002 / FR-015: no password and no auth; the app is a single-user localhost process. TC-17 asserts requests succeed without credentials."
+    },
+    {
+      "excluded": "403 forbidden (authenticated but unauthorized) on all operations",
+      "reason": "not-applicable",
+      "covered_by": "N/A — there are no principals, roles, or ownership scopes (FRD out of scope: no login)."
+    },
+    {
+      "excluded": "429 rate-limit on profile/import/people/attendance",
+      "reason": "not-applicable",
+      "covered_by": "N/A — single-user local stdlib server; no throttle is specified or desired."
+    },
+    {
+      "excluded": "502/503 upstream unavailable on all operations",
+      "reason": "not-applicable",
+      "covered_by": "N/A — no partner API, no hosted dependency; SQLite is in-process (architect review §4)."
+    },
+    {
+      "excluded": "Request timeout against a slow remote dependency",
+      "reason": "not-applicable",
+      "covered_by": "N/A — no remote calls. Local save latency is NFR-001 smoke TC-22, not a timeout-error contract."
+    },
+    {
+      "excluded": "500 internal error induced on each write route",
+      "reason": "not-applicable",
+      "covered_by": "N/A — no specified 500 contract; existing Handler returns JSON 400/404. Inducing a locked DB is destructive to the run and not an FRD AC. Hygiene 400 coverage is TC-38."
+    },
+    {
+      "excluded": "404 on PUT /api/profile (no resource id in path)",
+      "reason": "not-applicable",
+      "covered_by": "N/A — GroupProfile is a singleton (ADR-0001); the operation is not id-addressed. 404 applies to people PUT/DELETE (TC-39) and existing meeting/person attendance routes."
+    },
+    {
+      "excluded": "409 conflict on import or profile save",
+      "reason": "not-applicable",
+      "covered_by": "N/A — import is upsert-by-id (FR-009), not create-only; profile is a singleton upsert. 409 is specified only for people add duplicate (TASK-1.2.3#AC2, TC-32, architect F-6)."
+    },
+    {
+      "excluded": "NFR-001 as an automated 1-second CI gate",
+      "reason": "not-applicable",
+      "covered_by": "N/A as a hard gate — architect F-5 and PLAN TASK-1.2.1#AC6: manual/smoke only. Covered observationally by TC-22."
+    }
+  ],
+  "traceability": {
+    "_computed": "Written by /factory:plan step 5b via servers/lib/plan-verify.mjs — NOT hand-authored.",
+    "test_case_total": 39,
+    "tasks": {
+      "total": 5,
+      "covered": [
+        "TASK-1.1.1",
+        "TASK-1.1.2",
+        "TASK-1.2.1",
+        "TASK-1.2.2",
+        "TASK-1.2.3"
+      ],
+      "uncovered": []
+    },
+    "acceptance_criteria": {
+      "total": 46,
+      "traced": 46,
+      "untraced": [],
+      "unverified": 0,
+      "granularity": "per-ac",
+      "verdict": "complete"
+    }
+  }
+}

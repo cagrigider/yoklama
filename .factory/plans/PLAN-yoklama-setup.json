@@ -1,0 +1,428 @@
+{
+  "requirement": "REQ-yoklama-setup",
+  "generated_by": "planner",
+  "granularity": {
+    "preset": "capability",
+    "scope": "capability",
+    "axis": "vertical",
+    "ceiling": {
+      "tokens": 110000,
+      "files": 18,
+      "layers": 6
+    },
+    "split": {
+      "migration": "shared",
+      "tests": "folded",
+      "contracts": "folded",
+      "screen_states": "folded",
+      "endpoints": "per-family"
+    },
+    "objective": "balanced",
+    "executor": {
+      "model": "cursor-grok-4.6",
+      "reasoning": "autonomous",
+      "context": 200000
+    },
+    "sources": {
+      "preset": "flag",
+      "scope": "flag",
+      "axis": "flag",
+      "objective": "default",
+      "ceiling": {
+        "files": "derived",
+        "tokens": "derived",
+        "layers": "derived"
+      },
+      "split": {
+        "migration": "preset",
+        "tests": "preset",
+        "contracts": "preset",
+        "screen_states": "preset",
+        "endpoints": "preset"
+      },
+      "executor": "default"
+    }
+  },
+  "items": [
+    {
+      "type": "epic",
+      "key": "EPIC-1",
+      "parent": null,
+      "title": "Shareable local Yoklama setup",
+      "definition": "Make the existing local Yoklama app usable by other AI Champions via git clone: each champion configures their own group and roster on their machine, while Grup 8 data never ships in git and the operator’s database is not wiped.",
+      "explanation": "Yoklama already ticks attendance on 127.0.0.1 with SQLite and a Turkish SPA. It cannot be cloned as-is because setup was Grup 8-shaped. Sharing is git; there is no login and no central server.",
+      "reasoning": "BR-001–BR-007 / FR-001–FR-019. Without this epic, other champions must edit Python or inherit another group’s PII. Architect: additive schema only; do not invent OpenAPI.",
+      "expectations": "An empty clone completes first-run and can tick. An install that already has meetings keeps them, skips the wizard after a default profile insert, and uses Settings. Live tick, tags, notes, and copyable summaries remain. UI copy is Turkish.",
+      "acceptance_criteria": [
+        "A champion with an empty local database can configure group, series, and roster without changing source code, then use live attendance.",
+        "A database that already has meetings is not wiped by upgrade or Settings; the wizard does not appear after the upgrade insert.",
+        "The git-tracked tree does not contain a real roster or attendance database; the app still binds only to the local machine."
+      ],
+      "dependencies": [],
+      "labels": [
+        "yoklama-setup"
+      ]
+    },
+    {
+      "type": "story",
+      "key": "STORY-1.1",
+      "parent": "EPIC-1",
+      "title": "Empty clone becomes a configured group",
+      "definition": "On an empty install, the champion completes a first-run wizard that stores a group profile and fill-gap meetings, then reaches the meeting list.",
+      "explanation": "First-run is for clones with no profile and no meetings (TC-BE-001). The operator’s populated DB is not this story’s happy path; ADR-0001’s upgrade insert lives on the gate task so the operator never sees SCR-01.",
+      "reasoning": "BR-002, BR-005; FR-001–FR-006, FR-008. Series is a shared function (wizard and Settings) so it is its own capability; the wizard depends on it to persist meetings on save.",
+      "expectations": "Wizard is the first screen only when unconfigured per ADR-0001. Don’t-repeat, weekly, biweekly, and monthly rules match ADR-0003. Empty roster is allowed. Import on the wizard is optional and owned by STORY-1.2’s import task.",
+      "acceptance_criteria": [
+        "An empty database presents the first-run wizard and does not present the meeting list first.",
+        "Completing the wizard with a valid group name and series bounds persists the profile and the fill-gap meetings (including don’t-repeat = first date only).",
+        "Completing the wizard with zero people still persists the profile and meetings."
+      ],
+      "dependencies": [],
+      "labels": [
+        "yoklama-setup",
+        "first-run"
+      ]
+    },
+    {
+      "type": "task",
+      "key": "TASK-1.1.1",
+      "parent": "STORY-1.1",
+      "title": "Meeting series fill-gaps",
+      "definition": "Generate meeting dates from first date, end date, and repeat rule, inserting a meeting only when that calendar date has none.",
+      "explanation": "Wizard and Settings both apply the same bounded series. seed_meetings() is already a no-op; this task is the real generator. “Already has a meeting” means a row with that ISO date exists — do not add UNIQUE(date) (extra meetings on the same day must remain possible).",
+      "reasoning": "FR-003–FR-006, NFR-004 series half; OP-004 / OP-005 / OP-008 answered; ADR-0003 binding. Independent of SCR-01 chrome so Settings can reuse it. Risk (architect F-4 / F-9): monthly rule and date identity must not be re-guessed.",
+      "expectations": "none / weekly / biweekly / monthly as in ADR-0003. Reject end_date < first_date with no writes. Shortening the end date later does not delete rows. Generated rows are kind=series. Calendar dates only (YYYY-MM-DD), not timestamps. No OpenAPI.",
+      "acceptance_criteria": [
+        "Don’t-repeat (none) inserts a meeting on first_date only and does not require an end date.",
+        "Weekly inserts that weekday from first_date through end_date at 7-day steps; biweekly at 14-day steps — e.g. first 2026-09-09, end 2026-10-07, every 2 weeks yields meetings on 2026-09-09, 2026-09-23, and 2026-10-07 and not 2026-09-16.",
+        "Monthly, in each calendar month from the first date’s month through the end date’s month, inserts the date with the same weekday and week-of-month ordinal as first_date ((day - 1) // 7 + 1); skips a month with no such day (e.g. fifth Wednesday); keeps a date only if first_date <= d <= end_date.",
+        "A meeting is inserted only when no meetings row exists with that ISO date; existing meetings and their attendance are left unchanged; UNIQUE(date) is not added.",
+        "Series generation never deletes or replaces meetings or attendance, including when the stored end date is shortened afterwards.",
+        "If end_date is before first_date, the save is rejected and no meetings (and no other series writes) change.",
+        "Generated meetings have kind series; user-created extra meetings stay extra.",
+        "Date generation and fill-gap inserts live in one shared function (calendar datetime.date only). Wizard save and Settings save both call that function; neither reimplements weekly / biweekly / monthly ordinal."
+      ],
+      "dependencies": [],
+      "labels": [
+        "yoklama-setup",
+        "series"
+      ],
+      "complexity": "high",
+      "complexity_signals": [
+        "persistent_state",
+        "fan_out",
+        "real_logic",
+        "shared_code"
+      ],
+      "files_estimate": 5,
+      "layers": [
+        "db",
+        "api"
+      ],
+      "expected_tests": [
+        "TC-1",
+        "TC-18",
+        "TC-2",
+        "TC-3",
+        "TC-4",
+        "TC-5",
+        "TC-6",
+        "TC-7",
+        "TC-8"
+      ]
+    },
+    {
+      "type": "task",
+      "key": "TASK-1.1.2",
+      "parent": "STORY-1.1",
+      "title": "Group profile gate and first-run wizard",
+      "definition": "Persist GroupProfile as a SQLite singleton, intercept first-run per ADR-0001, and present a Turkish wizard that saves the profile and invokes fill-gaps.",
+      "explanation": "Configured means a group_profile row exists. Empty clone: no profile and no meetings → SCR-01. Operator after git pull: meetings exist, no profile → insert default profile, skip wizard, do not generate series. A local seed/people.json that fills an empty people table does not skip the wizard. Wizard may finish with zero people. Optional roster file on SCR-01 is owned by TASK-1.2.2; this task must still persist profile+meetings if import is skipped or later rejected (two transactions).",
+      "reasoning": "FR-001, FR-002, FR-003 (profile persist + don’t-repeat UI), FR-004/FR-005 (wizard save path), FR-008, FR-015, NFR-002 bind, NFR-003 wizard copy, NFR-004 additive migrate. Risk (architect F-1 / F-2 / F-8): literal “no profile → wizard” would show SCR-01 on Grup 8; sidecar JSON is forbidden; invalid import must not roll back a valid profile save.",
+      "expectations": "Additive CREATE TABLE IF NOT EXISTS (or equivalent additive migrate) only — never DROP TABLE or rebuild from seed. Singleton row in attendance.db. Wizard fields: group name, first date, repeat (every week / every 2 weeks / every month / don’t repeat), end date when repeating. Don’t-repeat hides end date. After success, meeting list. Listen only on 127.0.0.1; no password. Extend existing JSON handlers; no OpenAPI. Don’t-repeat / repeating saves call TASK-1.1.1.",
+      "acceptance_criteria": [
+        "A fresh local database with no people and no meetings has no group profile and, when the app is opened, shows the first-run wizard — not the meeting list.",
+        "WHILE a group profile row exists, the first-run wizard is not shown.",
+        "On init, if there is no profile row and at least one meeting exists, the system inserts a default profile (name empty or \"Yoklama\", first_date = earliest meeting date, end_date null, repeat_rule none) without inserting series dates, and does not show the wizard.",
+        "Seeding people from local seed/people.json when the people table is empty does not skip the wizard.",
+        "GroupProfile is stored as a SQLite singleton in the attendance database (not a sidecar file); schema changes are additive only (no DROP TABLE, no reseed of meetings or marks).",
+        "Completing the wizard with group name, first date, and don’t-repeat persists the profile and results in a meeting only on the first date.",
+        "Completing the wizard with every week, every 2 weeks, or every month and an end date on or after the first date persists the profile and fill-gap meetings for that weekday through the end date.",
+        "Submitting a repeating series with end date before first date is rejected; no profile is stored and no meetings are created.",
+        "Completing the wizard with zero people persists the profile and any generated meetings; the people list is empty.",
+        "A valid profile and series save commits independently of import: a later rejected import does not roll back the profile or meetings.",
+        "The app accepts connections on 127.0.0.1 and does not listen on 0.0.0.0; no password is required.",
+        "Wizard labels are in Turkish; don’t-repeat hides the end date field.",
+        "WHILE no group profile row exists, the first-run wizard is the only reachable product surface: Toplantılar, Settings, and Kişiler (including direct hashes #/, #/people, #/settings, #/meeting/:id) do not operate until a profile is saved.",
+        "GET /api/meta includes configured (boolean) and groupName (string), in addition to the existing meta fields. Wizard and Settings persist through PUT /api/profile with JSON { \"name\", \"firstDate\", \"endDate\" or null, \"repeatRule\": \"none\"|\"weekly\"|\"biweekly\"|\"monthly\" }. New profile JSON keys are camelCase like existing statusLabels. Document any alias in README; do not add OpenAPI or a second protocol."
+      ],
+      "dependencies": [
+        {
+          "task": "TASK-1.1.1",
+          "type": "FS"
+        }
+      ],
+      "labels": [
+        "yoklama-setup",
+        "wizard"
+      ],
+      "complexity": "high",
+      "complexity_signals": [
+        "persistent_state",
+        "real_logic",
+        "multi_file",
+        "shared_code"
+      ],
+      "files_estimate": 10,
+      "layers": [
+        "db",
+        "api",
+        "ui"
+      ],
+      "expected_tests": [
+        "TC-1",
+        "TC-10",
+        "TC-11",
+        "TC-12",
+        "TC-13",
+        "TC-14",
+        "TC-15",
+        "TC-16",
+        "TC-17",
+        "TC-2",
+        "TC-3",
+        "TC-38",
+        "TC-4",
+        "TC-5",
+        "TC-6",
+        "TC-7",
+        "TC-8",
+        "TC-9"
+      ]
+    },
+    {
+      "type": "story",
+      "key": "STORY-1.2",
+      "parent": "EPIC-1",
+      "title": "Configured install can change group and roster",
+      "definition": "After the app is configured (including the operator’s upgraded DB), the champion changes group name and series in Settings, imports a roster, and adds/edits/deletes people, while live tick keeps working.",
+      "explanation": "OP-003: Settings is for everyone, including the operator. FR-007 bundles series change, import, and people from Settings; those are three endpoint families / outcomes and stay three tasks. Header shows the saved group name.",
+      "reasoning": "BR-003, BR-004, BR-007, BR-008; FR-007, FR-009–FR-014, FR-016–FR-019. Live tick is in-scope as do-not-regress, not a rewrite.",
+      "expectations": "Settings uses the same fill-gaps and date-reject rules as first-run. Import is all-or-nothing upsert. People sicil is immutable; delete cascades attendance after confirm. README names required columns.",
+      "acceptance_criteria": [
+        "Settings can change group name and series bounds without deleting existing meetings or marks.",
+        "Champions can upsert people from Excel/CSV/people.json and can add/edit/delete people in the UI.",
+        "Live joined/absent ticking and related meeting UX remain available; the header shows the group name."
+      ],
+      "dependencies": [],
+      "labels": [
+        "yoklama-setup",
+        "settings"
+      ]
+    },
+    {
+      "type": "task",
+      "key": "TASK-1.2.1",
+      "parent": "STORY-1.2",
+      "title": "Settings, header, and live-tick preserve",
+      "definition": "Add Settings (SCR-04) to change group name and series with fill-gaps, show the group name in the header, and leave live attendance behavior unchanged.",
+      "explanation": "Operator lands here after ADR-0001’s default profile (name may still be empty/Yoklama until they type it). Meeting list (SCR-02) gains Settings access. Live tick (SCR-03), extra meeting CUD, tags, notes, and copyable summaries already exist — do not rewrite those handlers. NFR-001 is a manual smoke on the existing single-row save, not an automated wall-clock gate (architect F-5).",
+      "reasoning": "FR-007 (series/name portion), FR-019, FR-017, NFR-001, NFR-003 Settings copy. Settings save must call the same fill-gaps function as the wizard (ADR-0003). Risk: shortening end date must not DELETE (SCR-04). Performance signal dismissed: this task must not modify the attendance upsert hot path; the 1s check is a non-gating smoke on that existing path.",
+      "expectations": "Settings fields match the wizard’s series fields. Date error: no meeting deletes. After save, header shows the name on the meeting list. Product copy is Turkish, not spec-English. Import control on Settings is owned by TASK-1.2.2 (this task provides the Settings screen to host it). People navigation may already exist; write UI is TASK-1.2.3.",
+      "acceptance_criteria": [
+        "Settings allows changing group name, first date, end date, and repeat rule; it calls the TASK-1.1.1 fill-gaps function (same end-date reject and fill-gaps-only inserts as first-run; neither path reimplements the generator).",
+        "Saving Settings with a shorter end date leaves existing meetings (including extras) and their marks in place.",
+        "WHEN a group name is saved, the meeting-list header shows that name.",
+        "A configured install shows the meeting list (not the wizard), with access to Settings and People; extra meeting create/edit/delete stays as today.",
+        "Live joined/absent ticking, optional activity, tags, notes, and copyable person and meeting summaries still work; live tick write handlers are not rewritten.",
+        "Manual smoke only: saving one attendance mark on a roster of at most 80 people persists and updates that row within 1 second on the local machine — not an automated flaky gate.",
+        "Settings labels are in Turkish.",
+        "The Settings view includes a stable empty host for roster import (e.g. #settings-import). This task does not implement import."
+      ],
+      "dependencies": [
+        {
+          "task": "TASK-1.1.1",
+          "type": "FS"
+        },
+        {
+          "task": "TASK-1.1.2",
+          "type": "FS"
+        }
+      ],
+      "labels": [
+        "yoklama-setup",
+        "settings"
+      ],
+      "complexity": "medium",
+      "complexity_signals": [
+        "multi_file",
+        "shared_code"
+      ],
+      "files_estimate": 9,
+      "layers": [
+        "api",
+        "ui"
+      ],
+      "expected_tests": [
+        "TC-18",
+        "TC-19",
+        "TC-20",
+        "TC-21",
+        "TC-22",
+        "TC-23",
+        "TC-6"
+      ]
+    },
+    {
+      "type": "task",
+      "key": "TASK-1.2.2",
+      "parent": "STORY-1.2",
+      "title": "Roster import and README field contract",
+      "definition": "Import Excel, CSV, or people.json as an all-or-nothing upsert by sicil/id, and document the column contract in README (including that git does not track real rosters or DBs).",
+      "explanation": "Required columns: sicil or id, and name. Optional: position, center/yetkinlik; email stored if present, not required, not shown as required. Transport: SPA reads the file and POSTs JSON { filename, text } or { filename, contentBase64 } — no multipart parser. README merge: the field contract is the import contract (M1/M4). File pickers: optional on SCR-01, on SCR-04 once Settings has started (SS).",
+      "reasoning": "FR-009, FR-010, FR-016, NFR-002 git half, NFR-003 README; OP-002, OP-007, OP-012; ADR-0002. Risk (architect F-3 / F-7 / F-8): no requirements.txt / openpyxl; exotic xlsx fail toward CSV; rejected import must not undo profile.",
+      "expectations": "UTF-8 CSV (BOM tolerated). JSON array shape compatible with people.json. XLSX: first worksheet, shared strings and inline strings, numeric sicil as string without trailing .0. Macros / multiple header rows / password → reject whole file with an error telling the champion to save as CSV. Upsert by people.id; never delete people missing from the file. Validate every row before any write. Tracked example seed stays synthetic.",
+      "acceptance_criteria": [
+        "Importing a valid Excel, CSV, or people.json upserts people by sicil/id (add or update) and does not delete people who are absent from the file.",
+        "If any imported row lacks sicil/id or name, the whole file is rejected and no people change; the UI explains the failure.",
+        "Import uses the Python standard library only (CSV, JSON, first-sheet xlsx via zip/xml); no pip package and no requirements.txt for this path; the client sends a JSON body, not multipart.",
+        "Exotic xlsx (macros, multiple header rows, password-protected) is rejected with guidance to save as CSV.",
+        "Numeric sicil values from xlsx are stored as strings without a trailing .0; CSV UTF-8 BOM is tolerated.",
+        "Optional import on the wizard and import on Settings both use this behavior; a rejected import does not roll back an already-saved profile or meetings.",
+        "README states required columns sicil/id and name, optional position and center/yetkinlik, and that Excel means a simple first sheet; the git-tracked tree omits data/*.db and real seed/people.json.",
+        "Roster import is POST /api/people/import with a JSON body { \"filename\", \"text\" } or { \"filename\", \"contentBase64\" } (ADR-0002 / ADR-0004). Multipart is not the supported path. Wizard optional file control plus fill #settings-import (or the documented host) only; do not restyle the rest of Settings."
+      ],
+      "dependencies": [
+        {
+          "task": "TASK-1.1.2",
+          "type": "FS"
+        },
+        {
+          "task": "TASK-1.2.1",
+          "type": "SS"
+        }
+      ],
+      "labels": [
+        "yoklama-setup",
+        "import"
+      ],
+      "complexity": "high",
+      "complexity_signals": [
+        "persistent_state",
+        "real_logic",
+        "multi_file",
+        "shared_code"
+      ],
+      "files_estimate": 9,
+      "layers": [
+        "db",
+        "api",
+        "ui",
+        "docs"
+      ],
+      "expected_tests": [
+        "TC-16",
+        "TC-24",
+        "TC-25",
+        "TC-26",
+        "TC-27",
+        "TC-28",
+        "TC-29",
+        "TC-30",
+        "TC-38"
+      ]
+    },
+    {
+      "type": "task",
+      "key": "TASK-1.2.3",
+      "parent": "STORY-1.2",
+      "title": "People add, edit, and delete",
+      "definition": "Let the champion add, edit, and delete people in the UI, with sicil immutable, add validation, duplicate-id conflict, and confirmed delete that cascades attendance.",
+      "explanation": "People list is read-only today; schema already cascades person → attendance (FR-013). Wrong sicil → delete then add. Empty roster is valid. First-run intercept (TASK-1.1.2) owns whether unconfigured users see the meeting list first; this task does not skip that gate. Person history report stays as today.",
+      "reasoning": "FR-011–FR-014, FR-018, OP-006, OP-010, OP-011; architect F-6 (409 on duplicate add, no silent overwrite). Independent of series/wizard (people table already exists), so it can proceed in parallel.",
+      "expectations": "Add requires sicil/id and name; position, center, email optional. Edit: name, position, center changeable; sicil control disabled. Delete: confirm dialog warns that all of that person’s attendance marks will be removed; cancel leaves data. Forms in Turkish. Position/center remain visible on the person row or person report, and on the live roster when present.",
+      "acceptance_criteria": [
+        "Adding a person with sicil/id and name puts them on the roster; submitting add without sicil/id or name creates no person and shows validation.",
+        "Adding a person whose sicil/id already exists is rejected with conflict (409); the existing person is not silently overwritten.",
+        "Edit allows name, position, and center to change (email optional, stored if provided) and does not allow sicil/id to change; the sicil field is disabled when editing.",
+        "Confirming delete removes that person and all of their attendance rows; cancel leaves person and marks unchanged; the confirm warning states that attendance will be removed.",
+        "An empty people list is a valid state.",
+        "WHERE position or center is present, it is shown on the person row or person report, and center/position still appear on the live roster row when present.",
+        "People add/edit/delete copy is in Turkish.",
+        "People writes are POST /api/people, PUT /api/people/{id} (id in the path only), and DELETE /api/people/{id} (ADR-0004). Duplicate add is HTTP 409."
+      ],
+      "dependencies": [],
+      "labels": [
+        "yoklama-setup",
+        "people"
+      ],
+      "complexity": "high",
+      "complexity_signals": [
+        "persistent_state",
+        "irreversibility",
+        "real_logic",
+        "multi_file",
+        "shared_code"
+      ],
+      "files_estimate": 8,
+      "layers": [
+        "db",
+        "api",
+        "ui"
+      ],
+      "expected_tests": [
+        "TC-15",
+        "TC-31",
+        "TC-32",
+        "TC-33",
+        "TC-34",
+        "TC-35",
+        "TC-36",
+        "TC-37",
+        "TC-38",
+        "TC-39"
+      ]
+    }
+  ],
+  "parallelism": {
+    "waves": [
+      {
+        "wave": 1,
+        "tasks": [
+          "TASK-1.1.1",
+          "TASK-1.2.3"
+        ],
+        "width": 2
+      },
+      {
+        "wave": 2,
+        "tasks": [
+          "TASK-1.1.2"
+        ],
+        "width": 1
+      },
+      {
+        "wave": 3,
+        "tasks": [
+          "TASK-1.2.1",
+          "TASK-1.2.2"
+        ],
+        "width": 2
+      }
+    ],
+    "critical_path": [
+      "TASK-1.1.1",
+      "TASK-1.1.2",
+      "TASK-1.2.1"
+    ],
+    "max_concurrency_width": 2,
+    "method": "topological-hop-count",
+    "critical_path_length_hops": 2,
+    "notes": "Fill-gaps before wizard save (FS). Settings FS on profile gate and series. Import FS on wizard (SCR-01 file field) and SS on Settings (SCR-04 host). People CRUD has no contractual predecessor. README merged into import; live tick folded into Settings. No edge fabricated, dropped, or retyped to inflate width.",
+    "execution_hint": {
+      "mode": "parallel",
+      "suggested_max_parallel": 2,
+      "rationale": "4 high-complexity task(s), max width 2 — independent heavy work runs in lanes"
+    }
+  }
+}
