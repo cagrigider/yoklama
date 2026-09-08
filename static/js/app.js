@@ -14,6 +14,31 @@ const STATUS_LABELS = {
   strong: "Katkı",
 };
 
+const WIZARD_COPY = {
+  title: "Grubunu ayarla",
+  sub: "Grup adı ve toplantı takvimini kaydet. Kişileri sonra ekleyebilirsin.",
+  name: "Grup adı",
+  firstDate: "İlk toplantı tarihi",
+  repeat: "Tekrar",
+  endDate: "Bitiş tarihi",
+  save: "Kaydet ve devam et",
+  required: "Grup adı ve ilk tarih gerekli.",
+  dateError: "Bitiş tarihi ilk tarihten önce olamaz.",
+  endRequired: "Tekrarlayan seride bitiş tarihi gerekli.",
+  invalidDate: "Tarih geçersiz.",
+  none: "Tekrarlama yok",
+  weekly: "Her hafta",
+  biweekly: "2 haftada bir",
+  monthly: "Her ay",
+};
+
+const WIZARD_REPEATS = [
+  { value: "none", label: WIZARD_COPY.none },
+  { value: "weekly", label: WIZARD_COPY.weekly },
+  { value: "biweekly", label: WIZARD_COPY.biweekly },
+  { value: "monthly", label: WIZARD_COPY.monthly },
+];
+
 const PEOPLE_COPY = {
   title: "Kişiler",
   sub: "Yönetici “geldi mi, aktif miydi?” diye sorunca buradan bak.",
@@ -136,30 +161,31 @@ let viewSeq = 0;
 
 function route() {
   const seq = ++viewSeq;
-  const hash = location.hash.replace(/^#/, "") || "/";
-  const parts = hash.split("/").filter(Boolean);
-  document.querySelectorAll("[data-nav]").forEach((a) => {
-    const key = a.dataset.nav;
-    a.classList.toggle("active", (key === "home" && !parts.length) || parts[0] === key);
-  });
-  const run = !parts.length
-    ? renderMeetings()
-    : parts[0] === "people" && parts[1] === "new"
-      ? renderPersonForm()
-      : parts[0] === "people" && parts[1] && parts[2] === "edit"
-        ? renderPersonForm(parts[1])
-        : parts[0] === "people" && parts[1]
-          ? renderPerson(parts[1])
-          : parts[0] === "people"
-            ? renderPeople()
-            : parts[0] === "meeting" && parts[1] && parts[2] === "report"
-              ? renderMeetingReport(parts[1])
-              : parts[0] === "meeting" && parts[1]
-                ? renderLive(parts[1], seq)
-                : renderMeetings();
-  return Promise.resolve(run).then(() => {
-    if (seq !== viewSeq) return;
-  });
+  return api("/api/meta")
+    .then((meta) => {
+      if (seq !== viewSeq) return;
+      if (!meta.configured) {
+        document.querySelectorAll("[data-nav]").forEach((a) => a.classList.remove("active"));
+        return renderWizard();
+      }
+      const hash = location.hash.replace(/^#/, "") || "/";
+      const parts = hash.split("/").filter(Boolean);
+      document.querySelectorAll("[data-nav]").forEach((a) => {
+        const key = a.dataset.nav;
+        a.classList.toggle("active", (key === "home" && !parts.length) || parts[0] === key);
+      });
+      if (!parts.length) return renderMeetings();
+      if (parts[0] === "people" && parts[1] === "new") return renderPersonForm();
+      if (parts[0] === "people" && parts[1] && parts[2] === "edit") return renderPersonForm(parts[1]);
+      if (parts[0] === "people" && parts[1]) return renderPerson(parts[1]);
+      if (parts[0] === "people") return renderPeople();
+      if (parts[0] === "meeting" && parts[1] && parts[2] === "report") return renderMeetingReport(parts[1]);
+      if (parts[0] === "meeting" && parts[1]) return renderLive(parts[1], seq);
+      return renderMeetings();
+    })
+    .then(() => {
+      if (seq !== viewSeq) return;
+    });
 }
 
 function fmtDate(iso) {
@@ -170,6 +196,94 @@ function fmtDate(iso) {
     month: "long",
     year: "numeric",
   }).format(new Date(y, m - 1, d));
+}
+
+function wizardErrorText(err) {
+  if (err.code === "end_before_first") return WIZARD_COPY.dateError;
+  if (err.code === "end_required") return WIZARD_COPY.endRequired;
+  if (err.code === "invalid_date") return WIZARD_COPY.invalidDate;
+  return err.message;
+}
+
+function wizardRepeatButtons(selected) {
+  return WIZARD_REPEATS.map(
+    (opt) =>
+      `<button type="button" data-repeat="${opt.value}" data-on="${opt.value === selected}">${escapeHtml(opt.label)}</button>`
+  ).join("");
+}
+
+function syncWizardRepeat(form, rule) {
+  form.querySelector("[name=repeatRule]").value = rule;
+  form.querySelector("#wizard-end-wrap").hidden = rule === "none";
+  form.querySelectorAll("[data-repeat]").forEach((btn) => {
+    btn.dataset.on = btn.dataset.repeat === rule ? "true" : "false";
+  });
+}
+
+function bindWizardForm(form) {
+  form.querySelectorAll("[data-repeat]").forEach((btn) => {
+    btn.addEventListener("click", () => syncWizardRepeat(form, btn.dataset.repeat));
+  });
+  const errorEl = form.querySelector("#wizard-error");
+  const showError = (text) => {
+    errorEl.hidden = !text;
+    errorEl.textContent = text || "";
+  };
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const name = (data.name || "").trim();
+    const firstDate = (data.firstDate || "").trim();
+    const repeatRule = data.repeatRule || "none";
+    const endDate = (data.endDate || "").trim() || null;
+    if (!name || !firstDate) {
+      showError(WIZARD_COPY.required);
+      return;
+    }
+    if (repeatRule !== "none" && endDate && endDate < firstDate) {
+      showError(WIZARD_COPY.dateError);
+      return;
+    }
+    const payload = { name, firstDate, endDate: repeatRule === "none" ? null : endDate, repeatRule };
+    try {
+      await api("/api/profile", { method: "PUT", body: JSON.stringify(payload) });
+      if (location.hash === "#/" || location.hash === "" || location.hash === "#") {
+        await route();
+      } else {
+        location.hash = "#/";
+      }
+    } catch (err) {
+      showError(wizardErrorText(err));
+    }
+  });
+}
+
+async function renderWizard() {
+  $app.innerHTML = `
+    <div class="top">
+      <div>
+        <h2>${WIZARD_COPY.title}</h2>
+        <p class="sub">${WIZARD_COPY.sub}</p>
+      </div>
+    </div>
+    <form class="add-card person-form wizard-card" id="wizard-form" novalidate>
+      ${personFormField({ name: "name", label: WIZARD_COPY.name, required: true })}
+      ${personFormField({ name: "firstDate", label: WIZARD_COPY.firstDate, type: "date", required: true })}
+      <div class="field">
+        <span class="field-label">${WIZARD_COPY.repeat}</span>
+        <div class="seg">${wizardRepeatButtons("none")}</div>
+        <input type="hidden" name="repeatRule" value="none" />
+      </div>
+      <div id="wizard-end-wrap" hidden>
+        ${personFormField({ name: "endDate", label: WIZARD_COPY.endDate, type: "date" })}
+      </div>
+      <p class="form-error" id="wizard-error" hidden></p>
+      <div class="modal-actions">
+        <button class="btn primary" type="submit">${WIZARD_COPY.save}</button>
+      </div>
+    </form>
+  `;
+  bindWizardForm($app.querySelector("#wizard-form"));
 }
 
 async function renderMeetings() {

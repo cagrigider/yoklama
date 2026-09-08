@@ -638,6 +638,15 @@ a {
   display: none;
 }
 
+.wizard-card {
+  max-width: 480px;
+}
+
+.wizard-card[hidden],
+.wizard-card [hidden] {
+  display: none;
+}
+
 @media (max-width: 720px) {
   .topbar {
     flex-wrap: wrap;

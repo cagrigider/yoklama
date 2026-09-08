@@ -38,6 +38,8 @@ TAG_TR = {
 PRESENT = {"present", "quiet", "spoke", "strong"}
 REPEAT_RULES = ("none", "weekly", "biweekly", "monthly")
 SERIES_TITLE = "Toplantı"
+PROFILE_ID = 1
+DEFAULT_GROUP_NAME = "Yoklama"
 
 
 class SeriesError(ValueError):
@@ -84,10 +86,18 @@ def init_db() -> None:
             FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE,
             FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS group_profile (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            name TEXT NOT NULL DEFAULT '',
+            first_date TEXT NOT NULL,
+            end_date TEXT,
+            repeat_rule TEXT NOT NULL DEFAULT 'none'
+        );
         """
     )
     seed_people(conn)
     seed_meetings(conn)
+    ensure_default_profile(conn)
     conn.commit()
     conn.close()
 
@@ -182,6 +192,74 @@ def fill_gap_meetings(
         )
         inserted.append(day)
     return inserted
+
+
+def group_profile_row(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM group_profile WHERE id = ?", (PROFILE_ID,)).fetchone()
+
+
+def profile_meta(conn: sqlite3.Connection) -> dict:
+    """GET /api/meta extras: configured, groupName; optional firstDate, endDate, repeatRule."""
+    row = group_profile_row(conn)
+    if row is None:
+        return {
+            "configured": False,
+            "groupName": "",
+            "firstDate": None,
+            "endDate": None,
+            "repeatRule": None,
+        }
+    return {
+        "configured": True,
+        "groupName": row["name"] or "",
+        "firstDate": row["first_date"],
+        "endDate": row["end_date"],
+        "repeatRule": row["repeat_rule"],
+    }
+
+
+def upsert_group_profile(
+    conn: sqlite3.Connection,
+    name: str,
+    first_date: date,
+    end_date: date | None,
+    repeat_rule: str,
+) -> None:
+    """Write the id=1 GroupProfile singleton. Caller commits with fill_gap_meetings."""
+    conn.execute(
+        """
+        INSERT INTO group_profile (id, name, first_date, end_date, repeat_rule)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            first_date = excluded.first_date,
+            end_date = excluded.end_date,
+            repeat_rule = excluded.repeat_rule
+        """,
+        (
+            PROFILE_ID,
+            name,
+            first_date.isoformat(),
+            end_date.isoformat() if end_date is not None else None,
+            repeat_rule,
+        ),
+    )
+
+
+def ensure_default_profile(conn: sqlite3.Connection) -> None:
+    """ADR-0001: meetings exist and no profile → default row, no fill_gap_meetings."""
+    if group_profile_row(conn) is not None:
+        return
+    earliest = conn.execute("SELECT MIN(date) FROM meetings").fetchone()[0]
+    if earliest is None:
+        return
+    conn.execute(
+        """
+        INSERT INTO group_profile (id, name, first_date, end_date, repeat_rule)
+        VALUES (?, ?, ?, NULL, 'none')
+        """,
+        (PROFILE_ID, DEFAULT_GROUP_NAME, earliest),
+    )
 
 
 def row_to_person(r: sqlite3.Row) -> dict:
@@ -538,7 +616,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, target.read_bytes(), types.get(target.suffix, "application/octet-stream"))
 
     def _put_profile(self, conn: sqlite3.Connection) -> None:
+        """PUT /api/profile — persist group_profile + fill_gap_meetings in one transaction."""
         body = read_json(self)
+        if not isinstance(body, dict):
+            self.json(400, {"error": "invalid_json"})
+            return
+        raw_name = body.get("name")
+        name = "" if raw_name is None else str(raw_name).strip()
         first_raw = (body.get("firstDate") or "").strip()
         try:
             first = date.fromisoformat(first_raw)
@@ -556,7 +640,9 @@ class Handler(BaseHTTPRequestHandler):
         repeat_rule = (body.get("repeatRule") or "").strip()
         try:
             inserted = fill_gap_meetings(conn, first, end, repeat_rule)
+            upsert_group_profile(conn, name, first, end, repeat_rule)
         except SeriesError as err:
+            conn.rollback()
             self.json(400, {"error": err.code})
             return
         conn.commit()
@@ -565,6 +651,8 @@ class Handler(BaseHTTPRequestHandler):
             {
                 "ok": True,
                 "inserted": [d.isoformat() for d in inserted],
+                "configured": True,
+                "groupName": name,
             },
         )
 
@@ -572,6 +660,7 @@ class Handler(BaseHTTPRequestHandler):
         conn = db()
         try:
             if path == "/api/meta":
+                # GET /api/meta — existing fields plus configured, groupName (ADR-0004).
                 self.json(
                     200,
                     {
@@ -579,6 +668,7 @@ class Handler(BaseHTTPRequestHandler):
                         "statuses": STATUSES,
                         "tags": TAGS,
                         "statusLabels": STATUS_TR,
+                        **profile_meta(conn),
                     },
                 )
                 return
@@ -636,7 +726,8 @@ class Handler(BaseHTTPRequestHandler):
     def handle_api_write(self, method: str, path: str) -> None:
         conn = db()
         try:
-            # PUT /api/profile — series fill-gaps (wizard/Settings persist profile in TASK-1.1.2)
+            # PUT /api/profile — {name, firstDate, endDate|null, repeatRule}.
+            # Profile + fill_gap_meetings commit together; import is a later, separate write.
             if method == "PUT" and path == "/api/profile":
                 self._put_profile(conn)
                 return

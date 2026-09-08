@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS attendance (
     FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE,
     FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS group_profile (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    name TEXT NOT NULL DEFAULT '',
+    first_date TEXT NOT NULL,
+    end_date TEXT,
+    repeat_rule TEXT NOT NULL DEFAULT 'none'
+);
 """
 
 
@@ -84,3 +91,9 @@ class IsolatedDbTestCase(unittest.TestCase):
             "SELECT * FROM people ORDER BY name COLLATE NOCASE"
         ).fetchall()
         return [app.row_to_person(r) for r in rows]
+
+    def profile_row(self) -> sqlite3.Row | None:
+        return app.group_profile_row(self.conn)
+
+    def profile_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM group_profile").fetchone()[0]
