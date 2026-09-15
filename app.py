@@ -48,6 +48,13 @@ PROFILE_ID = 1
 DEFAULT_GROUP_NAME = "Yoklama"
 SICIL_FLOAT_RE = re.compile(r"^-?\d+\.0+$")
 XLSX_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+SSML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+XLSX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+MEETING_EXPORT_HEADERS = ("Tarih", "Grup", "Katılımcı Sayısı")
 IMPORT_MSG = {
     "missing_id_or_name": (
         "Dosyadaki her satırda sicil (veya id) ve ad olmalı. Hiçbir kişi güncellenmedi."
@@ -355,6 +362,151 @@ def meeting_counts(conn: sqlite3.Connection, meeting_id: int) -> dict:
         "absent": absent,
         "unmarked": unmarked,
     }
+
+
+def _xml_escape(text: str) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _xlsx_col(index: int) -> str:
+    """0-based column index → A, B, … Z (enough for three export columns)."""
+    return chr(ord("A") + index)
+
+
+def build_simple_xlsx(headers: tuple[str, ...] | list[str], rows: list[list]) -> bytes:
+    """Stdlib OOXML: one first sheet, inline strings + numeric cells. No openpyxl."""
+
+    def _inline(ref: str, text: str) -> str:
+        return f'<c r="{ref}" t="inlineStr"><is><t>{_xml_escape(text)}</t></is></c>'
+
+    def _number(ref: str, value: int | float) -> str:
+        return f'<c r="{ref}"><v>{value}</v></c>'
+
+    def _cell(ref: str, value: object) -> str:
+        if isinstance(value, bool):
+            return _inline(ref, str(value))
+        if isinstance(value, int) and not isinstance(value, bool):
+            return _number(ref, value)
+        if isinstance(value, float):
+            return _number(ref, value)
+        return _inline(ref, str(value))
+
+    header_xml = "".join(_inline(f"{_xlsx_col(i)}1", h) for i, h in enumerate(headers))
+    body_xml = []
+    for row_i, values in enumerate(rows, start=2):
+        cells = "".join(_cell(f"{_xlsx_col(c)}{row_i}", v) for c, v in enumerate(values))
+        body_xml.append(f'<row r="{row_i}">{cells}</row>')
+    sheet = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<worksheet xmlns="{SSML_NS}"><sheetData>'
+        f'<row r="1">{header_xml}</row>'
+        f'{"".join(body_xml)}'
+        "</sheetData></worksheet>"
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<workbook xmlns="{SSML_NS}" xmlns:r="{XLSX_REL_NS}">'
+        '<sheets><sheet name="Rapor" sheetId="1" r:id="rId1"/></sheets>'
+        "</workbook>"
+    )
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{PKG_REL_NS}">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        "</Relationships>"
+    )
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Relationships xmlns="{PKG_REL_NS}">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>'
+        "</Relationships>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<Types xmlns="{CONTENT_TYPES_NS}">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", root_rels)
+        zf.writestr("xl/workbook.xml", workbook)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet)
+    return buf.getvalue()
+
+
+def format_export_date(iso_day: str) -> str:
+    """ISO YYYY-MM-DD → DD/MM/YYYY."""
+    day = date.fromisoformat(iso_day)
+    return f"{day.day:02d}/{day.month:02d}/{day.year}"
+
+
+def export_group_name(conn: sqlite3.Connection) -> str:
+    row = group_profile_row(conn)
+    if row is None:
+        return DEFAULT_GROUP_NAME
+    return (row["name"] or "").strip() or DEFAULT_GROUP_NAME
+
+
+def meetings_export_rows(
+    conn: sqlite3.Connection, start: date, end: date
+) -> list[list]:
+    """One row per meeting in [start, end]: Tarih, Grup, Katılımcı Sayısı."""
+    group = export_group_name(conn)
+    rows = conn.execute(
+        """
+        SELECT id, date FROM meetings
+        WHERE date >= ? AND date <= ?
+        ORDER BY date ASC, id ASC
+        """,
+        (start.isoformat(), end.isoformat()),
+    ).fetchall()
+    out: list[list] = []
+    for meeting in rows:
+        counts = meeting_counts(conn, meeting["id"])
+        out.append(
+            [format_export_date(meeting["date"]), group, counts["present"]]
+        )
+    return out
+
+
+def build_meetings_export_xlsx(
+    conn: sqlite3.Connection, start: date, end: date
+) -> bytes:
+    return build_simple_xlsx(MEETING_EXPORT_HEADERS, meetings_export_rows(conn, start, end))
+
+
+def parse_export_range(query: dict) -> tuple[date, date] | tuple[None, str]:
+    """Parse ?from=&to= query. Returns (start, end) or (None, error_code)."""
+    raw_from = (query.get("from") or [None])[0]
+    raw_to = (query.get("to") or [None])[0]
+    if not raw_from or not raw_to:
+        return None, "invalid_date"
+    try:
+        start = date.fromisoformat(str(raw_from).strip())
+        end = date.fromisoformat(str(raw_to).strip())
+    except ValueError:
+        return None, "invalid_date"
+    if end < start:
+        return None, "end_before_first"
+    return start, end
 
 
 def person_history(conn: sqlite3.Connection, person_id: str) -> list[dict]:
@@ -909,11 +1061,20 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _send(
+        self,
+        code: int,
+        body: bytes,
+        content_type: str,
+        *,
+        content_disposition: str | None = None,
+    ) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if content_disposition:
+            self.send_header("Content-Disposition", content_disposition)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1062,6 +1223,29 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/export":
                 self.json(200, export_all(conn))
+                return
+            if path == "/api/reports/meetings.xlsx":
+                parsed = parse_export_range(query)
+                if parsed[0] is None:
+                    self.json(400, {"error": parsed[1]})
+                    return
+                start, end = parsed
+                body = build_meetings_export_xlsx(conn, start, end)
+                if (
+                    start.day == 1
+                    and end.month == start.month
+                    and end.year == start.year
+                    and (end + timedelta(days=1)).day == 1
+                ):
+                    filename = f"yoklama-{start.year:04d}-{start.month:02d}.xlsx"
+                else:
+                    filename = f"yoklama-{start.isoformat()}_{end.isoformat()}.xlsx"
+                self._send(
+                    200,
+                    body,
+                    XLSX_CONTENT_TYPE,
+                    content_disposition=f'attachment; filename="{filename}"',
+                )
                 return
             self.not_found()
         finally:

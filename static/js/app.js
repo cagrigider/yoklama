@@ -490,8 +490,31 @@ async function renderMeetings() {
         <button class="btn primary" type="submit">Ekle</button>
       </form>
     </section>
+    <section class="add-card export-card" id="meeting-export">
+      <strong>Raporu dışa aktar</strong>
+      <p class="field-hint">Toplantıları Excel olarak indir. Sütunlar: Tarih, Grup, Katılımcı Sayısı.</p>
+      <div class="seg" data-export-mode>
+        <button type="button" data-mode="month" data-on="true">Bu ay</button>
+        <button type="button" data-mode="range" data-on="false">Tarih aralığı</button>
+      </div>
+      <div class="export-range" data-export-range hidden>
+        <label class="field">
+          <span class="field-label">Başlangıç</span>
+          <input type="date" name="exportFrom" />
+        </label>
+        <label class="field">
+          <span class="field-label">Bitiş</span>
+          <input type="date" name="exportTo" />
+        </label>
+      </div>
+      <p class="form-error" id="export-error" hidden></p>
+      <div class="modal-actions">
+        <button type="button" class="btn primary" id="export-xlsx">Excel indir</button>
+      </div>
+    </section>
     <div class="grid" id="meeting-list"></div>
   `;
+  bindMeetingExport(meta.today);
   const list = $app.querySelector("#meeting-list");
   list.innerHTML = meetings
     .map((m) => {
@@ -572,6 +595,93 @@ async function renderMeetings() {
     const created = await api("/api/meetings", { method: "POST", body: JSON.stringify(data) });
     toast("Toplantı eklendi");
     location.hash = `#/meeting/${created.id}`;
+  });
+}
+
+function monthBounds(isoToday) {
+  const [y, m] = isoToday.split("-").map(Number);
+  const start = `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return { from: start, to: end };
+}
+
+function bindMeetingExport(isoToday) {
+  const root = $app.querySelector("#meeting-export");
+  if (!root) return;
+  const rangeWrap = root.querySelector("[data-export-range]");
+  const errorEl = root.querySelector("#export-error");
+  const fromInput = root.querySelector('[name="exportFrom"]');
+  const toInput = root.querySelector('[name="exportTo"]');
+  let mode = "month";
+  const showError = (text) => {
+    errorEl.hidden = !text;
+    errorEl.textContent = text || "";
+  };
+  const syncMode = (next) => {
+    mode = next;
+    root.querySelectorAll("[data-mode]").forEach((btn) => {
+      btn.dataset.on = btn.dataset.mode === mode ? "true" : "false";
+    });
+    rangeWrap.hidden = mode !== "range";
+    showError("");
+  };
+  root.querySelectorAll("[data-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => syncMode(btn.dataset.mode));
+  });
+  root.querySelector("#export-xlsx").addEventListener("click", async () => {
+    let from;
+    let to;
+    if (mode === "month") {
+      ({ from, to } = monthBounds(isoToday));
+    } else {
+      from = (fromInput.value || "").trim();
+      to = (toInput.value || "").trim();
+      if (!from || !to) {
+        showError("Başlangıç ve bitiş tarihi gerekli.");
+        return;
+      }
+      if (to < from) {
+        showError("Bitiş tarihi başlangıçtan önce olamaz.");
+        return;
+      }
+    }
+    showError("");
+    try {
+      const res = await fetch(
+        `/api/reports/meetings.xlsx?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      );
+      if (!res.ok) {
+        let message = "İndirme başarısız.";
+        try {
+          const data = await res.json();
+          if (data.error === "end_before_first") {
+            message = "Bitiş tarihi başlangıçtan önce olamaz.";
+          } else if (data.error === "invalid_date") {
+            message = "Tarih geçersiz.";
+          }
+        } catch {
+          /* binary or empty */
+        }
+        showError(message);
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename = match ? match[1] : `yoklama-${from}_${to}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast("Excel indirildi");
+    } catch {
+      showError("İndirme başarısız.");
+    }
   });
 }
 
