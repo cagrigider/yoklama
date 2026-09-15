@@ -500,11 +500,11 @@ async function renderMeetings() {
       <div class="export-range" data-export-range hidden>
         <label class="field">
           <span class="field-label">Başlangıç</span>
-          <input type="date" name="exportFrom" />
+          <input type="date" name="exportFrom" disabled />
         </label>
         <label class="field">
           <span class="field-label">Bitiş</span>
-          <input type="date" name="exportTo" />
+          <input type="date" name="exportTo" disabled />
         </label>
       </div>
       <p class="form-error" id="export-error" hidden></p>
@@ -620,12 +620,16 @@ function bindMeetingExport(isoToday) {
   };
   const syncMode = (next) => {
     mode = next;
+    const rangeOn = mode === "range";
     root.querySelectorAll("[data-mode]").forEach((btn) => {
       btn.dataset.on = btn.dataset.mode === mode ? "true" : "false";
     });
-    rangeWrap.hidden = mode !== "range";
+    rangeWrap.hidden = !rangeOn;
+    fromInput.disabled = !rangeOn;
+    toInput.disabled = !rangeOn;
     showError("");
   };
+  syncMode("month");
   root.querySelectorAll("[data-mode]").forEach((btn) => {
     btn.addEventListener("click", () => syncMode(btn.dataset.mode));
   });

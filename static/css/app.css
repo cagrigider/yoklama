@@ -477,6 +477,16 @@ a {
   grid-template-columns: 1fr 1fr;
 }
 
+.export-range[hidden] {
+  display: none;
+}
+
+.export-range input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--seg);
+}
+
 @media (max-width: 640px) {
   .export-range {
     grid-template-columns: 1fr;
