@@ -462,6 +462,37 @@ a {
   box-shadow: 0 1px 0 rgba(26, 25, 22, 0.08);
 }
 
+.export-card {
+  display: grid;
+  gap: 12px;
+}
+
+.export-card .seg {
+  margin-top: 2px;
+}
+
+.export-range {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.export-range[hidden] {
+  display: none;
+}
+
+.export-range input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--seg);
+}
+
+@media (max-width: 640px) {
+  .export-range {
+    grid-template-columns: 1fr;
+  }
+}
+
 .tags {
   display: flex;
   flex-wrap: wrap;

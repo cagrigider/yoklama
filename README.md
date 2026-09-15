@@ -86,6 +86,13 @@ Makinede zaten toplantı kaydı varsa sihirbaz atlanır; varsayılan bir profil 
 
 Ana sayfada seriden gelen ve senin eklediğin toplantılar listelenir. **Toplantı ekle** ile ekstra bir oturum açabilirsin. Karttaki **Düzenle** tarih/not değiştirir; **Sil** o toplantıyı (ve işaretlerini) kaldırır.
 
+Ayrı bir kart olan **Raporu dışa aktar** ile toplantıları Excel (`.xlsx`) olarak indirebilirsin:
+
+- **Bu ay** — bugünün takvim ayındaki tüm toplantılar
+- **Tarih aralığı** — seçtiğin başlangıç ve bitiş (dahil)
+
+Sütunlar: **Tarih** (`GG/AA/YYYY`), **Grup** (kurulumdaki grup adı), **Katılımcı Sayısı** (o gün “katıldı” işaretlenenler). Bu kart **Toplantı ekle** formunun içinde değildir.
+
 ### Canlı yoklama
 
 Toplantı kartına tıkla. Arama kutusundan isim veya yetkinlik süz. Her kişi için:
