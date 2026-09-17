@@ -67,6 +67,7 @@ class IsolatedDbTestCase(unittest.TestCase):
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
+        self.conn.executescript(app.CERT_SCHEMA_SQL)
         self.conn.commit()
 
     def tearDown(self) -> None:
