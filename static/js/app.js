@@ -93,6 +93,84 @@ const PEOPLE_COPY = {
   sessions: "oturum",
 };
 
+const CERT_COPY = {
+  title: "Sertifikalar",
+  sub: "Takip ettiğin kursları ekle. Kim aldığını Academy doğrulama bağlantısıyla kaydet.",
+  add: "Sertifika ekle",
+  edit: "Düzenle",
+  remove: "Sil",
+  save: "Kaydet",
+  cancel: "Vazgeç",
+  name: "Sertifika adı",
+  nameHint: "Academy’deki kurs başlığıyla aynı yaz.",
+  notes: "Not",
+  url: "Kurs bağlantısı",
+  empty: "Henüz sertifika yok. Takip etmek istediğin kursu ekle.",
+  holders: "Aldı",
+  missing: "Almadı",
+  holdersEmpty: "Bu sertifikayı henüz kimse almadı.",
+  missingEmpty: "Gruptaki herkes bu sertifikayı aldı.",
+  noPeople: "Henüz kişi yok. Önce kişi ekle.",
+  added: "Sertifika eklendi",
+  updated: "Sertifika güncellendi",
+  deleted: "Sertifika silindi",
+  required: "Sertifika adı gerekli.",
+  duplicate: "Bu sertifika adı zaten var.",
+  deleteTitle: "Sertifikayı sil",
+  deleteConfirm: "Evet, sil",
+  addTitle: "Sertifika ekle",
+  editTitle: "Sertifikayı düzenle",
+  personAdd: "Sertifika ekle",
+  personHint: "Academy doğrulama bağlantısını veya 32 karakterlik kodu yapıştır.",
+  personUrl: "Doğrulama bağlantısı",
+  personSave: "Kontrol et ve kaydet",
+  personEmpty: "Henüz sertifika kaydı yok.",
+  issued: "Veriliş",
+  forced: "Elle onaylandı",
+  validationTitle: "Kayıt yapılmadı. Kontrol etmen gereken alanlar:",
+  force: "Yine de kaydet",
+  assigned: "Sertifika kaydedildi",
+  unreachable: "Claude Academy şu an kontrol edilemedi. Tekrar dene.",
+  removeAssign: "Kaldır",
+  back: "Sertifikalar",
+};
+
+function certCountLabel(have, total) {
+  return `${have} / ${total} kişi aldı`;
+}
+
+function certProblemText(problem) {
+  if (problem === "not exist") return "Academy’de bulunamadı";
+  if (problem === "listede yok") return "takip listesinde yok";
+  return problem;
+}
+
+function certExpectedText(value) {
+  if (value == null || value === "") return "";
+  if (Array.isArray(value)) {
+    return value.length ? value.join(", ") : "(listede sertifika yok)";
+  }
+  return String(value);
+}
+
+function certFieldLine(field) {
+  const problem = certProblemText(field.problem);
+  const expected = certExpectedText(field.expected);
+  const actual = field.actual != null && field.actual !== "" ? String(field.actual) : "";
+  const holder = field.holderName ? ` (${field.holderName})` : "";
+  let detail = "";
+  if (expected && actual) {
+    detail = ` — beklenen “${expected}”, gelen “${actual}”`;
+  } else if (expected) {
+    detail = ` — beklenen: ${expected}`;
+  } else if (actual) {
+    detail = ` — ${actual}${holder}`;
+  } else if (holder) {
+    detail = holder;
+  }
+  return `${field.label}: ${problem}${detail}`;
+}
+
 const JOINED = new Set(["present", "quiet", "spoke", "strong"]);
 
 function isJoined(p) {
@@ -127,6 +205,9 @@ async function api(path, options = {}) {
     const err = new Error(data.message || data.error || "İstek başarısız");
     err.status = res.status;
     err.code = data.error;
+    err.fields = data.fields;
+    err.forceAllowed = data.forceAllowed;
+    err.payload = data;
     throw err;
   }
   return data;
@@ -207,6 +288,12 @@ function route() {
       });
       if (!parts.length) return renderMeetings();
       if (parts[0] === "settings") return renderSettings();
+      if (parts[0] === "certificates" && parts[1] === "new") return renderCertificateForm();
+      if (parts[0] === "certificates" && parts[1] && parts[2] === "edit") {
+        return renderCertificateForm(parts[1]);
+      }
+      if (parts[0] === "certificates" && parts[1]) return renderCertificateDetail(parts[1]);
+      if (parts[0] === "certificates") return renderCertificates();
       if (parts[0] === "people" && parts[1] === "new") return renderPersonForm();
       if (parts[0] === "people" && parts[1] && parts[2] === "edit") return renderPersonForm(parts[1]);
       if (parts[0] === "people" && parts[1]) return renderPerson(parts[1]);
@@ -961,6 +1048,204 @@ function peopleDeleteWarning(name) {
   return `“${name}” silinsin mi? Bu kişinin tüm yoklama kayıtları da silinir. Bu işlem geri alınamaz.`;
 }
 
+function certDeleteWarning(name) {
+  return `“${name}” silinsin mi? Bu sertifikaya bağlı kişi kayıtları da silinir. Bu işlem geri alınamaz.`;
+}
+
+function certCard(c) {
+  const notes = c.notes ? `<p class="meta">${escapeHtml(c.notes)}</p>` : "";
+  return `
+    <article class="meeting-card" data-id="${c.id}" data-name="${escapeHtml(c.name)}">
+      <a class="meeting-card-main" href="#/certificates/${c.id}">
+        <div>
+          <p class="meeting-title">${escapeHtml(c.name)}</p>
+          ${notes}
+        </div>
+        <span class="chip present">${escapeHtml(certCountLabel(c.haveCount, c.peopleCount))}</span>
+      </a>
+      <div class="meeting-card-actions">
+        <a class="btn ghost" href="#/certificates/${c.id}/edit">${CERT_COPY.edit}</a>
+        <button type="button" class="btn danger" data-delete>${CERT_COPY.remove}</button>
+      </div>
+    </article>`;
+}
+
+async function confirmDeleteCertificate(id, name) {
+  const ok = await confirmDialog({
+    title: CERT_COPY.deleteTitle,
+    body: certDeleteWarning(name),
+    confirmLabel: CERT_COPY.deleteConfirm,
+  });
+  if (!ok) return false;
+  await api(`/api/certificates/${id}`, { method: "DELETE" });
+  toast(CERT_COPY.deleted);
+  return true;
+}
+
+async function renderCertificates() {
+  const certs = await api("/api/certificates");
+  $app.innerHTML = `
+    <div class="top">
+      <div>
+        <h2>${CERT_COPY.title}</h2>
+        <p class="sub">${CERT_COPY.sub}</p>
+      </div>
+      <a class="btn primary" href="#/certificates/new">${CERT_COPY.add}</a>
+    </div>
+    <div class="grid" id="cert-list"></div>
+  `;
+  const list = $app.querySelector("#cert-list");
+  if (!certs.length) {
+    list.innerHTML = `<p class="empty">${CERT_COPY.empty}</p>`;
+    return;
+  }
+  list.innerHTML = certs.map(certCard).join("");
+  list.querySelectorAll("[data-delete]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest(".meeting-card");
+      const removed = await confirmDeleteCertificate(card.dataset.id, card.dataset.name);
+      if (removed) renderCertificates();
+    });
+  });
+}
+
+function personMiniRow(p, extra = "") {
+  return `
+    <a class="meeting-card" href="#/people/${encodeURIComponent(p.id)}">
+      <div>
+        <p class="meeting-title">${escapeHtml(p.name)}</p>
+        <p class="meta">${escapeHtml(p.id)}${extra ? " · " + extra : ""}</p>
+      </div>
+    </a>`;
+}
+
+function formatIssued(iso) {
+  if (!iso) return "";
+  const day = String(iso).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return escapeHtml(iso);
+  return fmtDate(day);
+}
+
+async function renderCertificateDetail(id) {
+  const cert = await api(`/api/certificates/${id}`);
+  const holders = cert.holders || [];
+  const missing = cert.missing || [];
+  const notes = cert.notes ? `<p class="sub">${escapeHtml(cert.notes)}</p>` : "";
+  const urlLine = cert.url
+    ? `<p class="sub"><a class="link-quiet" href="${escapeHtml(cert.url)}" target="_blank" rel="noopener">${escapeHtml(cert.url)}</a></p>`
+    : "";
+  const holderRows = holders.length
+    ? holders
+        .map((p) => {
+          const issued = p.issuedAt ? formatIssued(p.issuedAt) : "";
+          const forced = p.forced ? ` · ${CERT_COPY.forced}` : "";
+          return personMiniRow(p, `${issued}${forced}`);
+        })
+        .join("")
+    : `<p class="empty">${cert.peopleCount === 0 ? CERT_COPY.noPeople : CERT_COPY.holdersEmpty}</p>`;
+  const missingRows = missing.length
+    ? missing.map((p) => personMiniRow(p)).join("")
+    : `<p class="empty">${cert.peopleCount === 0 ? CERT_COPY.noPeople : CERT_COPY.missingEmpty}</p>`;
+  $app.innerHTML = `
+    <div class="top">
+      <div>
+        <h2>${escapeHtml(cert.name)}</h2>
+        <p class="sub">${escapeHtml(certCountLabel(cert.haveCount, cert.peopleCount))}</p>
+        ${notes}${urlLine}
+      </div>
+      <div class="live-actions">
+        <a class="btn ghost" href="#/certificates">${CERT_COPY.back}</a>
+        <a class="btn ghost" href="#/certificates/${cert.id}/edit">${CERT_COPY.edit}</a>
+      </div>
+    </div>
+    <div class="split-lists">
+      <section>
+        <h3>${CERT_COPY.holders}</h3>
+        <div class="grid">${holderRows}</div>
+      </section>
+      <section>
+        <h3>${CERT_COPY.missing}</h3>
+        <div class="grid">${missingRows}</div>
+      </section>
+    </div>
+  `;
+}
+
+async function renderCertificateForm(editId) {
+  const editing = Boolean(editId);
+  let cert = { name: "", notes: "", url: "" };
+  if (editing) {
+    cert = await api(`/api/certificates/${editId}`);
+  }
+  $app.innerHTML = `
+    <div class="top">
+      <div>
+        <h2>${editing ? CERT_COPY.editTitle : CERT_COPY.addTitle}</h2>
+        <p class="sub">${CERT_COPY.nameHint}</p>
+      </div>
+      <a class="btn ghost" href="#/certificates">${CERT_COPY.cancel}</a>
+    </div>
+    <form class="add-card person-form" id="cert-form" novalidate>
+      ${personFormField({ name: "name", label: CERT_COPY.name, value: cert.name, required: true })}
+      <label class="field">
+        <span class="field-label">${CERT_COPY.notes}</span>
+        <textarea id="cert-notes" name="notes" rows="3">${escapeHtml(cert.notes || "")}</textarea>
+      </label>
+      ${personFormField({ name: "url", label: CERT_COPY.url, value: cert.url || "" })}
+      <p class="form-error" id="cert-form-error" hidden></p>
+      <div class="modal-actions">
+        <a class="btn ghost" href="#/certificates">${CERT_COPY.cancel}</a>
+        <button class="btn primary" type="submit">${CERT_COPY.save}</button>
+      </div>
+    </form>
+  `;
+  const form = $app.querySelector("#cert-form");
+  const errorEl = $app.querySelector("#cert-form-error");
+  const showError = (text) => {
+    errorEl.hidden = !text;
+    errorEl.textContent = text || "";
+  };
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    const name = (data.name || "").trim();
+    if (!name) {
+      showError(CERT_COPY.required);
+      return;
+    }
+    const payload = {
+      name,
+      notes: (data.notes || "").trim(),
+      url: (data.url || "").trim(),
+    };
+    try {
+      if (editing) {
+        await api(`/api/certificates/${editId}`, { method: "PUT", body: JSON.stringify(payload) });
+        toast(CERT_COPY.updated);
+        location.hash = `#/certificates/${editId}`;
+      } else {
+        const created = await api("/api/certificates", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        toast(CERT_COPY.added);
+        location.hash = `#/certificates/${created.id}`;
+      }
+    } catch (err) {
+      showError(err.code === "duplicate_name" ? CERT_COPY.duplicate : err.message);
+    }
+  });
+}
+
+function validationReportHtml(fields) {
+  const items = (fields || []).map((f) => `<li>${escapeHtml(certFieldLine(f))}</li>`).join("");
+  return `
+    <div class="validation-report" role="alert">
+      <p>${CERT_COPY.validationTitle}</p>
+      <ul>${items}</ul>
+    </div>`;
+}
+
 function peopleRow(p) {
   const role = personSubtitle(p);
   const counts = `${p.present}/${p.total} ${PEOPLE_COPY.sessions}`;
@@ -1132,6 +1417,30 @@ async function renderPersonForm(editId) {
 async function renderPerson(id) {
   const report = await api(`/api/people/${id}/report`);
   const role = personSubtitle(report.person);
+  const certs = report.certificates || [];
+  const certRows = certs.length
+    ? certs
+        .map((c) => {
+          const issued = c.issuedAt ? formatIssued(c.issuedAt) : "";
+          const forced = c.forced
+            ? `<span class="chip">${CERT_COPY.forced}</span>`
+            : "";
+          return `
+        <article class="meeting-card">
+          <a class="meeting-card-main" href="#/certificates/${c.certificateId}">
+            <div>
+              <p class="meeting-title">${escapeHtml(c.name)}</p>
+              <p class="meta">${issued ? CERT_COPY.issued + ": " + issued : escapeHtml(c.verifyCode)}</p>
+            </div>
+            ${forced}
+          </a>
+          <div class="meeting-card-actions">
+            <button type="button" class="btn danger" data-unassign="${c.certificateId}">${CERT_COPY.removeAssign}</button>
+          </div>
+        </article>`;
+        })
+        .join("")
+    : `<p class="empty">${CERT_COPY.personEmpty}</p>`;
   $app.innerHTML = `
     <div class="top">
       <div>
@@ -1145,6 +1454,25 @@ async function renderPerson(id) {
       </div>
     </div>
     <p class="report-card">${escapeHtml(report.summary)}</p>
+    <section class="cert-person-block">
+      <div class="top">
+        <h3>${CERT_COPY.title}</h3>
+      </div>
+      <div class="grid">${certRows}</div>
+      <form class="add-card person-form" id="person-cert-form" novalidate>
+        ${personFormField({
+          name: "url",
+          label: CERT_COPY.personUrl,
+          hint: CERT_COPY.personHint,
+        })}
+        <div id="person-cert-report"></div>
+        <p class="form-error" id="person-cert-error" hidden></p>
+        <div class="modal-actions">
+          <button class="btn ghost" type="button" id="person-cert-force" hidden>${CERT_COPY.force}</button>
+          <button class="btn primary" type="submit">${CERT_COPY.personSave}</button>
+        </div>
+      </form>
+    </section>
     <div class="grid" style="margin-top:14px">
       ${report.history
         .map(
@@ -1164,6 +1492,72 @@ async function renderPerson(id) {
     await navigator.clipboard.writeText(report.summary);
     toast("Kopyalandı");
   });
+  $app.querySelectorAll("[data-unassign]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const certId = btn.getAttribute("data-unassign");
+      const ok = await confirmDialog({
+        title: CERT_COPY.removeAssign,
+        body: "Bu kişinin bu sertifika kaydı silinsin mi?",
+        confirmLabel: CERT_COPY.removeAssign,
+      });
+      if (!ok) return;
+      await api(
+        `/api/people/${encodeURIComponent(report.person.id)}/certificates/${certId}`,
+        { method: "DELETE" }
+      );
+      toast(CERT_COPY.deleted);
+      renderPerson(id);
+    });
+  });
+  const form = $app.querySelector("#person-cert-form");
+  const errorEl = $app.querySelector("#person-cert-error");
+  const reportEl = $app.querySelector("#person-cert-report");
+  const forceBtn = $app.querySelector("#person-cert-force");
+  let lastUrl = "";
+  const showError = (text) => {
+    errorEl.hidden = !text;
+    errorEl.textContent = text || "";
+  };
+  const showFields = (fields, forceAllowed) => {
+    reportEl.innerHTML = fields && fields.length ? validationReportHtml(fields) : "";
+    forceBtn.hidden = !forceAllowed;
+  };
+  const submitCert = async (force) => {
+    const data = Object.fromEntries(new FormData(form));
+    const url = (data.url || lastUrl || "").trim();
+    lastUrl = url;
+    if (!url) {
+      showError(CERT_COPY.personHint);
+      return;
+    }
+    showError("");
+    try {
+      await api(`/api/people/${encodeURIComponent(report.person.id)}/certificates`, {
+        method: "POST",
+        body: JSON.stringify({ url, force: Boolean(force) }),
+      });
+      toast(CERT_COPY.assigned);
+      renderPerson(id);
+    } catch (err) {
+      if (err.code === "academy_unreachable") {
+        showFields([], false);
+        showError(CERT_COPY.unreachable);
+        return;
+      }
+      if (err.code === "validation_failed" && err.fields) {
+        showFields(err.fields, Boolean(err.forceAllowed));
+        showError("");
+        return;
+      }
+      showFields([], false);
+      showError(err.message);
+    }
+  };
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitCert(false);
+  });
+  forceBtn.addEventListener("click", () => submitCert(true));
 }
 
 function escapeHtml(value) {

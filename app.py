@@ -9,11 +9,14 @@ import io
 import json
 import re
 import sqlite3
+import unicodedata
 import zipfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent
@@ -72,6 +75,61 @@ NAME_HEADERS = frozenset({"name", "ad", "isim"})
 POSITION_HEADERS = frozenset({"position", "pozisyon"})
 CENTER_HEADERS = frozenset({"center", "yetkinlik"})
 EMAIL_HEADERS = frozenset({"email", "e-posta", "eposta", "e_posta"})
+ACADEMY_VERIFY_URL = (
+    "https://academy.claude.com/api/"
+    "anthropic.academy_public.api.v1alpha.AcademyPublicService/VerifyCertificate"
+)
+ACADEMY_TIMEOUT_SEC = 15
+VERIFY_CODE_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+VERIFY_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?academy\.claude\.com/verify/([0-9a-fA-F]{32})\b",
+    re.IGNORECASE,
+)
+# Fold Turkish letters before casefold so İ/I/ı and Ç/Ğ/Ö/Ş/Ü match ASCII forms.
+_TR_FOLD = str.maketrans(
+    {
+        "ç": "c",
+        "Ç": "c",
+        "ğ": "g",
+        "Ğ": "g",
+        "ı": "i",
+        "I": "i",
+        "İ": "i",
+        "ö": "o",
+        "Ö": "o",
+        "ş": "s",
+        "Ş": "s",
+        "ü": "u",
+        "Ü": "u",
+    }
+)
+FORCEABLE_FIELDS = frozenset({"name", "certificate"})
+CERT_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS certificates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    notes TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    sort INTEGER
+);
+CREATE TABLE IF NOT EXISTS person_certificates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id TEXT NOT NULL,
+    certificate_id INTEGER NOT NULL,
+    verify_code TEXT NOT NULL UNIQUE,
+    certificate_name TEXT NOT NULL DEFAULT '',
+    issued_at TEXT,
+    verified_at TEXT NOT NULL,
+    forced INTEGER NOT NULL DEFAULT 0,
+    force_fields TEXT NOT NULL DEFAULT '[]',
+    UNIQUE (person_id, certificate_id),
+    FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE,
+    FOREIGN KEY (certificate_id) REFERENCES certificates(id) ON DELETE CASCADE
+);
+"""
+ACADEMY_UNREACHABLE_MSG = (
+    "Claude Academy şu an kontrol edilemedi. Bağlantını kontrol edip tekrar dene."
+)
 
 
 class SeriesError(ValueError):
@@ -89,6 +147,10 @@ class RosterImportError(ValueError):
         super().__init__(code)
         self.code = code
         self.message = message or IMPORT_MSG.get(code, IMPORT_MSG["invalid_file"])
+
+
+class AcademyUnreachable(Exception):
+    """Claude Academy verify call failed (network, timeout, unexpected HTTP)."""
 
 
 def db() -> sqlite3.Connection:
@@ -135,6 +197,7 @@ def init_db() -> None:
             repeat_rule TEXT NOT NULL DEFAULT 'none'
         );
         """
+        + CERT_SCHEMA_SQL
     )
     seed_people(conn)
     seed_meetings(conn)
@@ -597,6 +660,7 @@ def person_report(conn: sqlite3.Connection, person_id: str) -> dict | None:
         "lastPresent": last,
         "summary": summary,
         "history": history,
+        "certificates": person_certificate_rows(conn, person_id),
     }
 
 
@@ -745,6 +809,593 @@ def delete_person(conn: sqlite3.Connection, person_id: str) -> tuple[int, dict]:
     conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
     conn.commit()
     return 200, {"ok": True, "id": person_id}
+
+
+def parse_verify_code(raw: str) -> str | None:
+    """Accept a 32-hex code or an academy.claude.com/verify/{code} URL."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    match = VERIFY_URL_RE.search(text)
+    if match:
+        return match.group(1).lower()
+    if VERIFY_CODE_RE.fullmatch(text):
+        return text.lower()
+    return None
+
+
+def normalize_match_text(value: str) -> str:
+    """Compare names/titles: trim, fold Turkish letters, strip accents, casefold."""
+    folded = (value or "").translate(_TR_FOLD)
+    decomposed = unicodedata.normalize("NFKD", folded)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return " ".join(stripped.casefold().split())
+
+
+def names_match(roster_name: str, academy_name: str) -> bool:
+    left = normalize_match_text(roster_name)
+    right = normalize_match_text(academy_name)
+    return bool(left) and left == right
+
+
+def fetch_academy_badge(verify_code: str) -> dict:
+    """POST Academy VerifyCertificate. Tests may replace this function on the module."""
+    body = json.dumps({"verifyCode": verify_code}).encode("utf-8")
+    request = Request(
+        ACADEMY_VERIFY_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # Cloudflare rejects Python-urllib's default UA (error 1010).
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+            ),
+            "Origin": "https://academy.claude.com",
+            "Referer": f"https://academy.claude.com/verify/{verify_code}",
+        },
+    )
+    try:
+        with urlopen(request, timeout=ACADEMY_TIMEOUT_SEC) as response:
+            raw = response.read()
+            payload = _decode_academy_json(raw)
+    except HTTPError as err:
+        try:
+            raw = err.read()
+        except OSError as read_err:
+            raise AcademyUnreachable from read_err
+        payload = _decode_academy_json(raw)
+        if err.code >= 500 or _academy_blocked(payload):
+            raise AcademyUnreachable from err
+        return payload
+    except (URLError, TimeoutError, OSError) as err:
+        raise AcademyUnreachable from err
+    if _academy_blocked(payload):
+        raise AcademyUnreachable()
+    return payload
+
+
+def _decode_academy_json(raw: bytes) -> dict:
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as err:
+        raise AcademyUnreachable from err
+    return payload if isinstance(payload, dict) else {}
+
+
+def _academy_blocked(payload: dict) -> bool:
+    """Cloudflare/WAF pages must not be treated as an invalid badge."""
+    if payload.get("cloudflare_error"):
+        return True
+    if payload.get("error_code") == 1010:
+        return True
+    status = payload.get("status")
+    return status in (403, 429, 503)
+
+
+def _validation_field(
+    field: str,
+    label: str,
+    problem: str,
+    *,
+    expected=None,
+    actual=None,
+    extra: dict | None = None,
+) -> dict:
+    item = {
+        "field": field,
+        "label": label,
+        "problem": problem,
+        "expected": expected,
+        "actual": actual,
+    }
+    if extra:
+        item.update(extra)
+    return item
+
+
+def row_to_certificate(r: sqlite3.Row, extra: dict | None = None) -> dict:
+    item = {
+        "id": r["id"],
+        "name": r["name"],
+        "notes": r["notes"],
+        "url": r["url"],
+        "sort": r["sort"],
+    }
+    if extra:
+        item.update(extra)
+    return item
+
+
+def people_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+
+
+def certificate_have_count(conn: sqlite3.Connection, certificate_id: int) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM person_certificates WHERE certificate_id = ?",
+        (certificate_id,),
+    ).fetchone()[0]
+
+
+def list_certificates(conn: sqlite3.Connection) -> list[dict]:
+    total = people_count(conn)
+    rows = conn.execute(
+        """
+        SELECT c.*,
+            (SELECT COUNT(*) FROM person_certificates pc WHERE pc.certificate_id = c.id)
+                AS have_count
+        FROM certificates c
+        ORDER BY COALESCE(c.sort, 1000000) ASC, c.name COLLATE NOCASE
+        """
+    ).fetchall()
+    return [
+        row_to_certificate(
+            r,
+            {"haveCount": r["have_count"], "peopleCount": total},
+        )
+        for r in rows
+    ]
+
+
+def find_certificate_by_title(conn: sqlite3.Connection, title: str) -> sqlite3.Row | None:
+    target = normalize_match_text(title)
+    if not target:
+        return None
+    for row in conn.execute("SELECT * FROM certificates").fetchall():
+        if normalize_match_text(row["name"]) == target:
+            return row
+    return None
+
+
+def catalog_names(conn: sqlite3.Connection) -> list[str]:
+    return [
+        r["name"]
+        for r in conn.execute(
+            "SELECT name FROM certificates ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+    ]
+
+
+def certificate_holders(conn: sqlite3.Connection, certificate_id: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT p.id, p.name, pc.issued_at, pc.verify_code, pc.forced, pc.force_fields
+        FROM person_certificates pc
+        JOIN people p ON p.id = pc.person_id
+        WHERE pc.certificate_id = ?
+        ORDER BY p.name COLLATE NOCASE
+        """,
+        (certificate_id,),
+    ).fetchall()
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "issuedAt": r["issued_at"],
+            "verifyCode": r["verify_code"],
+            "forced": bool(r["forced"]),
+            "forceFields": parse_force_fields(r["force_fields"]),
+        }
+        for r in rows
+    ]
+
+
+def certificate_missing(conn: sqlite3.Connection, certificate_id: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT id, name FROM people
+        WHERE id NOT IN (
+            SELECT person_id FROM person_certificates WHERE certificate_id = ?
+        )
+        ORDER BY name COLLATE NOCASE
+        """,
+        (certificate_id,),
+    ).fetchall()
+    return [{"id": r["id"], "name": r["name"]} for r in rows]
+
+
+def get_certificate(conn: sqlite3.Connection, certificate_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM certificates WHERE id = ?", (certificate_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    holders = certificate_holders(conn, certificate_id)
+    return row_to_certificate(
+        row,
+        {
+            "haveCount": len(holders),
+            "peopleCount": people_count(conn),
+            "holders": holders,
+            "missing": certificate_missing(conn, certificate_id),
+        },
+    )
+
+
+def insert_certificate(conn: sqlite3.Connection, body: dict) -> tuple[int, dict]:
+    """POST /api/certificates — {name, notes?, url?}."""
+    name = optional_person_field(body, "name")
+    if not name:
+        return 400, {"error": "missing_name"}
+    notes = optional_person_field(body, "notes")
+    url = optional_person_field(body, "url")
+    try:
+        cur = conn.execute(
+            "INSERT INTO certificates (name, notes, url) VALUES (?, ?, ?)",
+            (name, notes, url),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return 409, {"error": "duplicate_name"}
+    detail = get_certificate(conn, int(cur.lastrowid))
+    return 201, detail or {"id": cur.lastrowid, "name": name}
+
+
+def update_certificate(
+    conn: sqlite3.Connection, certificate_id: int, body: dict
+) -> tuple[int, dict]:
+    existing = conn.execute(
+        "SELECT * FROM certificates WHERE id = ?", (certificate_id,)
+    ).fetchone()
+    if existing is None:
+        return 404, {"error": "not_found"}
+    name = optional_person_field(body, "name", existing["name"])
+    if not name:
+        return 400, {"error": "missing_name"}
+    notes = optional_person_field(body, "notes", existing["notes"])
+    url = optional_person_field(body, "url", existing["url"])
+    try:
+        conn.execute(
+            "UPDATE certificates SET name = ?, notes = ?, url = ? WHERE id = ?",
+            (name, notes, url, certificate_id),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return 409, {"error": "duplicate_name"}
+    return 200, get_certificate(conn, certificate_id) or {"error": "not_found"}
+
+
+def delete_certificate(conn: sqlite3.Connection, certificate_id: int) -> tuple[int, dict]:
+    existing = conn.execute(
+        "SELECT id FROM certificates WHERE id = ?", (certificate_id,)
+    ).fetchone()
+    if existing is None:
+        return 404, {"error": "not_found"}
+    conn.execute("DELETE FROM certificates WHERE id = ?", (certificate_id,))
+    conn.commit()
+    return 200, {"ok": True, "id": certificate_id}
+
+
+def parse_force_fields(raw: str) -> list[str]:
+    try:
+        values = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(values, list):
+        return []
+    return [str(v) for v in values]
+
+
+def row_to_assignment(r: sqlite3.Row) -> dict:
+    return {
+        "id": r["id"],
+        "certificateId": r["certificate_id"],
+        "name": r["catalog_name"],
+        "url": r["catalog_url"],
+        "verifyCode": r["verify_code"],
+        "certificateName": r["certificate_name"],
+        "issuedAt": r["issued_at"],
+        "verifiedAt": r["verified_at"],
+        "forced": bool(r["forced"]),
+        "forceFields": parse_force_fields(r["force_fields"]),
+    }
+
+
+def person_certificate_rows(conn: sqlite3.Connection, person_id: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT pc.*, c.name AS catalog_name, c.url AS catalog_url
+        FROM person_certificates pc
+        JOIN certificates c ON c.id = pc.certificate_id
+        WHERE pc.person_id = ?
+        ORDER BY c.name COLLATE NOCASE
+        """,
+        (person_id,),
+    ).fetchall()
+    return [row_to_assignment(r) for r in rows]
+
+
+def _assignment_payload(
+    conn: sqlite3.Connection, person_id: str, certificate_id: int
+) -> dict | None:
+    row = conn.execute(
+        """
+        SELECT pc.*, c.name AS catalog_name, c.url AS catalog_url
+        FROM person_certificates pc
+        JOIN certificates c ON c.id = pc.certificate_id
+        WHERE pc.person_id = ? AND pc.certificate_id = ?
+        """,
+        (person_id, certificate_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return row_to_assignment(row)
+
+
+def add_person_certificate(
+    conn: sqlite3.Connection,
+    person_id: str,
+    body: dict,
+    *,
+    fetcher=None,
+) -> tuple[int, dict]:
+    """POST /api/people/{id}/certificates — live Academy check, then name and catalog title."""
+    person = conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
+    if person is None:
+        return 404, {"error": "not_found"}
+    raw = body.get("url")
+    if raw is None:
+        raw = body.get("verifyCode")
+    code = parse_verify_code("" if raw is None else str(raw))
+    fields: list[dict] = []
+    if not code:
+        fields.append(
+            _validation_field(
+                "verifyCode",
+                "doğrulama kodu",
+                "geçersiz",
+                actual="" if raw is None else str(raw).strip(),
+            )
+        )
+        return 422, {
+            "error": "validation_failed",
+            "forceAllowed": False,
+            "fields": fields,
+        }
+
+    holder = conn.execute(
+        """
+        SELECT pc.person_id, p.name
+        FROM person_certificates pc
+        JOIN people p ON p.id = pc.person_id
+        WHERE pc.verify_code = ?
+        """,
+        (code,),
+    ).fetchone()
+
+    get_badge = fetcher or fetch_academy_badge
+    try:
+        badge = get_badge(code)
+    except AcademyUnreachable:
+        return 503, {"error": "academy_unreachable", "message": ACADEMY_UNREACHABLE_MSG}
+
+    valid = isinstance(badge, dict) and badge.get("valid") is True
+    academy_name = str((badge or {}).get("certificateName") or "") if valid else ""
+    course_title = str((badge or {}).get("courseTitle") or "") if valid else ""
+    issued_at = (badge or {}).get("issuedAt") if valid else None
+    if issued_at is not None:
+        issued_at = str(issued_at)
+
+    if not valid:
+        fields.append(
+            _validation_field(
+                "academy",
+                "Academy",
+                "not exist",
+                actual=code,
+            )
+        )
+    if holder is not None:
+        fields.append(
+            _validation_field(
+                "verifyCode",
+                "doğrulama kodu",
+                "zaten kayıtlı",
+                actual=code,
+                extra={"holderId": holder["person_id"], "holderName": holder["name"]},
+            )
+        )
+
+    catalog = None
+    if valid:
+        if not names_match(person["name"], academy_name):
+            fields.append(
+                _validation_field(
+                    "name",
+                    "ad",
+                    "eşleşmedi",
+                    expected=person["name"],
+                    actual=academy_name,
+                )
+            )
+        catalog = find_certificate_by_title(conn, course_title)
+        if catalog is None:
+            fields.append(
+                _validation_field(
+                    "certificate",
+                    "sertifika adı",
+                    "listede yok",
+                    expected=catalog_names(conn),
+                    actual=course_title,
+                )
+            )
+
+    force = bool(body.get("force"))
+    if fields:
+        force_allowed = all(item["field"] in FORCEABLE_FIELDS for item in fields)
+        if not (force and force_allowed):
+            return 422, {
+                "error": "validation_failed",
+                "forceAllowed": force_allowed,
+                "fields": fields,
+            }
+        force_fields = [item["field"] for item in fields]
+    else:
+        force_fields = []
+
+    if catalog is None:
+        try:
+            cur = conn.execute(
+                "INSERT INTO certificates (name, notes, url) VALUES (?, '', '')",
+                (course_title.strip() or "Claude Academy",),
+            )
+            catalog_id = int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            catalog = find_certificate_by_title(conn, course_title)
+            if catalog is None:
+                return 409, {"error": "duplicate_name"}
+            catalog_id = int(catalog["id"])
+    else:
+        catalog_id = int(catalog["id"])
+
+    existing_pair = conn.execute(
+        """
+        SELECT id FROM person_certificates
+        WHERE person_id = ? AND certificate_id = ?
+        """,
+        (person_id, catalog_id),
+    ).fetchone()
+    if existing_pair is not None:
+        return 422, {
+            "error": "validation_failed",
+            "forceAllowed": False,
+            "fields": [
+                _validation_field(
+                    "certificate",
+                    "sertifika adı",
+                    "zaten kayıtlı",
+                    expected=None,
+                    actual=course_title,
+                )
+            ],
+        }
+
+    verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        conn.execute(
+            """
+            INSERT INTO person_certificates (
+                person_id, certificate_id, verify_code, certificate_name,
+                issued_at, verified_at, forced, force_fields
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                person_id,
+                catalog_id,
+                code,
+                academy_name,
+                issued_at,
+                verified_at,
+                1 if force_fields else 0,
+                json.dumps(force_fields),
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return 422, {
+            "error": "validation_failed",
+            "forceAllowed": False,
+            "fields": [
+                _validation_field(
+                    "verifyCode",
+                    "doğrulama kodu",
+                    "zaten kayıtlı",
+                    actual=code,
+                )
+            ],
+        }
+    payload = _assignment_payload(conn, person_id, catalog_id)
+    return 201, payload or {"ok": True}
+
+
+def delete_person_certificate(
+    conn: sqlite3.Connection, person_id: str, certificate_id: int
+) -> tuple[int, dict]:
+    existing = conn.execute(
+        """
+        SELECT id FROM person_certificates
+        WHERE person_id = ? AND certificate_id = ?
+        """,
+        (person_id, certificate_id),
+    ).fetchone()
+    if existing is None:
+        return 404, {"error": "not_found"}
+    conn.execute(
+        "DELETE FROM person_certificates WHERE person_id = ? AND certificate_id = ?",
+        (person_id, certificate_id),
+    )
+    conn.commit()
+    return 200, {"ok": True, "personId": person_id, "certificateId": certificate_id}
+
+
+def certificate_path_id(path: str) -> int | None:
+    """Integer id for /api/certificates/{id}."""
+    parts = path.split("/")
+    if len(parts) != 4 or parts[1] != "api" or parts[2] != "certificates":
+        return None
+    if not parts[3].isdigit():
+        return None
+    return int(parts[3])
+
+
+def person_certificates_post_id(path: str) -> str | None:
+    """Person id for POST /api/people/{id}/certificates."""
+    parts = path.split("/")
+    if (
+        len(parts) != 5
+        or parts[1] != "api"
+        or parts[2] != "people"
+        or parts[4] != "certificates"
+    ):
+        return None
+    person_id = parts[3]
+    if not person_id or person_id == "import":
+        return None
+    return person_id
+
+
+def person_certificate_delete_ids(path: str) -> tuple[str, int] | None:
+    """person_id, certificate_id for DELETE /api/people/{id}/certificates/{certId}."""
+    parts = path.split("/")
+    if (
+        len(parts) != 6
+        or parts[1] != "api"
+        or parts[2] != "people"
+        or parts[4] != "certificates"
+        or not parts[5].isdigit()
+    ):
+        return None
+    person_id = parts[3]
+    if not person_id or person_id == "import":
+        return None
+    return person_id, int(parts[5])
 
 
 def coerce_sicil(value: object) -> str:
@@ -1224,6 +1875,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/export":
                 self.json(200, export_all(conn))
                 return
+            if path == "/api/certificates":
+                self.json(200, list_certificates(conn))
+                return
+            cert_id = certificate_path_id(path)
+            if cert_id is not None:
+                detail = get_certificate(conn, cert_id)
+                if detail is None:
+                    self.not_found()
+                    return
+                self.json(200, detail)
+                return
             if path == "/api/reports/meetings.xlsx":
                 parsed = parse_export_range(query)
                 if parsed[0] is None:
@@ -1279,6 +1941,47 @@ class Handler(BaseHTTPRequestHandler):
                     self.json(400, {"error": "invalid_json"})
                     return
                 code, payload = insert_person(conn, body)
+                self.json(code, payload)
+                return
+
+            if method == "POST" and path == "/api/certificates":
+                body = read_json(self)
+                if not isinstance(body, dict):
+                    self.json(400, {"error": "invalid_json"})
+                    return
+                code, payload = insert_certificate(conn, body)
+                self.json(code, payload)
+                return
+
+            cert_id = certificate_path_id(path)
+            if cert_id is not None and method == "PUT":
+                body = read_json(self)
+                if not isinstance(body, dict):
+                    self.json(400, {"error": "invalid_json"})
+                    return
+                code, payload = update_certificate(conn, cert_id, body)
+                self.json(code, payload)
+                return
+
+            if cert_id is not None and method == "DELETE":
+                code, payload = delete_certificate(conn, cert_id)
+                self.json(code, payload)
+                return
+
+            assign_person_id = person_certificates_post_id(path)
+            if assign_person_id and method == "POST":
+                body = read_json(self)
+                if not isinstance(body, dict):
+                    self.json(400, {"error": "invalid_json"})
+                    return
+                code, payload = add_person_certificate(conn, assign_person_id, body)
+                self.json(code, payload)
+                return
+
+            delete_ids = person_certificate_delete_ids(path)
+            if delete_ids and method == "DELETE":
+                person_id, certificate_id = delete_ids
+                code, payload = delete_person_certificate(conn, person_id, certificate_id)
                 self.json(code, payload)
                 return
 

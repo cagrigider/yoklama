@@ -22,7 +22,7 @@ export async function expectMeetingList(page: Page) {
   await expect(wizardHeading(page)).toHaveCount(0);
 }
 
-export async function openNav(page: Page, key: "home" | "people" | "settings") {
+export async function openNav(page: Page, key: "home" | "people" | "certificates" | "settings") {
   await page.locator(`[data-nav="${key}"]`).click();
 }
 
