@@ -48,12 +48,22 @@ const SETTINGS_COPY = {
 
 const IMPORT_COPY = {
   title: "Kişi listesi aktar",
-  hint: "Excel (basit ilk sayfa), CSV veya people.json. Zorunlu: sicil veya id, ve ad. İsteğe bağlı: pozisyon, yetkinlik. E-posta varsa kaydedilir.",
+  hint: "Excel, CSV veya people.json. Zorunlu sütunlar ve örnek için Format.",
   optional: "İsteğe bağlı — boş bırakabilirsin.",
+  format: "Format",
+  formatTitle: "Aktarım formatı",
+  formatClose: "Tamam",
+  formatRules:
+    "İlk satır başlık olmalı. Dosya UTF-8 olsun; ayraç virgül veya noktalı virgül. Zorunlu: sicil ve ad. İsteğe bağlı: pozisyon, yetkinlik, e-posta.",
+  formatHeaders:
+    "Kabul edilen başlıklar — Sicil: sicil, Sicil No, id · Ad: name, Adı Soyadı, ad · Pozisyon: position, Pozisyon · Yetkinlik: center, Yetkinlik Merkezi · E-posta: email, E-posta Adresi (İş).",
+  formatSample: `Sicil No,Adı Soyadı,Pozisyon,Yetkinlik Merkezi,E-posta Adresi (İş)
+10001,Örnek Kişi,Software Developer,Example,ornek@example.com`,
   pick: "Dosya seç",
   import: "Aktar",
   ok: "Kişiler aktarıldı",
   missing: "Dosyadaki her satırda sicil ve ad olmalı. Hiçbir kişi güncellenmedi.",
+  missingColumns: "Zorunlu sütun bulunamadı: sicil, ad. İlk satır başlık olmalı.",
   exotic: "Bu Excel dosyası okunamadı (makro, birden fazla başlık satırı veya şifre). CSV olarak kaydedip tekrar dene.",
   unsupported: "Desteklenen dosyalar: Excel (xlsx), CSV veya people.json.",
   invalid: "Dosya okunamadı. CSV, JSON veya basit bir Excel sayfası dene.",
@@ -253,6 +263,33 @@ function confirmDialog({ title, body, confirmLabel = "Sil", danger = true }) {
   });
 }
 
+function importFormatDialog() {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal-back";
+    wrap.innerHTML = `
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-format-title">
+        <h3 id="import-format-title">${escapeHtml(IMPORT_COPY.formatTitle)}</h3>
+        <p>${escapeHtml(IMPORT_COPY.formatRules)}</p>
+        <p>${escapeHtml(IMPORT_COPY.formatHeaders)}</p>
+        <pre class="import-sample">${escapeHtml(IMPORT_COPY.formatSample)}</pre>
+        <div class="modal-actions">
+          <button type="button" class="btn primary" data-ok>${escapeHtml(IMPORT_COPY.formatClose)}</button>
+        </div>
+      </div>`;
+    const finish = () => {
+      wrap.remove();
+      resolve();
+    };
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) finish();
+    });
+    wrap.querySelector("[data-ok]").addEventListener("click", finish);
+    document.body.appendChild(wrap);
+    wrap.querySelector("[data-ok]").focus();
+  });
+}
+
 function meetingEditorFields(m) {
   return `
     <input name="title" value="${escapeHtml(m.title)}" required />
@@ -349,10 +386,11 @@ async function postRosterImport(file) {
 }
 
 function importErrorText(err) {
-  if (err.code === "missing_id_or_name") return IMPORT_COPY.missing;
+  if (err.code === "missing_id_or_name") return err.message || IMPORT_COPY.missing;
+  if (err.code === "missing_columns") return err.message || IMPORT_COPY.missingColumns;
   if (err.code === "exotic_xlsx") return IMPORT_COPY.exotic;
   if (err.code === "unsupported_type") return IMPORT_COPY.unsupported;
-  if (err.code === "invalid_file") return IMPORT_COPY.invalid;
+  if (err.code === "invalid_file") return err.message || IMPORT_COPY.invalid;
   if (err.code === "missing_body") return IMPORT_COPY.missingBody;
   return err.message || IMPORT_COPY.failed;
 }
@@ -361,10 +399,21 @@ function rosterFileFieldHtml(inputId, { optional = false } = {}) {
   const hint = optional ? `${IMPORT_COPY.optional} ${IMPORT_COPY.hint}` : IMPORT_COPY.hint;
   return `
       <div class="field">
-        <span class="field-label">${IMPORT_COPY.title}</span>
+        <div class="field-label-row">
+          <span class="field-label">${IMPORT_COPY.title}</span>
+          <button type="button" class="btn ghost btn-compact" data-import-format>${escapeHtml(IMPORT_COPY.format)}</button>
+        </div>
         <span class="field-hint">${escapeHtml(hint)}</span>
         <input type="file" id="${escapeHtml(inputId)}" accept=".xlsx,.csv,.json,.xls,.xlsm" />
       </div>`;
+}
+
+function bindImportFormatButtons(root) {
+  root.querySelectorAll("[data-import-format]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      importFormatDialog();
+    });
+  });
 }
 
 function wizardRepeatButtons(selected) {
@@ -483,7 +532,9 @@ async function renderWizard() {
       </div>
     </form>
   `;
-  bindWizardForm($app.querySelector("#wizard-form"));
+  const wizardForm = $app.querySelector("#wizard-form");
+  bindWizardForm(wizardForm);
+  bindImportFormatButtons(wizardForm);
 }
 
 function bindSettingsForm(form) {
@@ -506,6 +557,7 @@ function fillSettingsImport(host) {
       <button type="button" class="btn primary" id="settings-import-btn">${IMPORT_COPY.import}</button>
     </div>
   `;
+  bindImportFormatButtons(host);
   const errorEl = host.querySelector("#settings-import-error");
   const showError = (text) => {
     errorEl.hidden = !text;

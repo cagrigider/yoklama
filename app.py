@@ -62,19 +62,27 @@ IMPORT_MSG = {
     "missing_id_or_name": (
         "Dosyadaki her satırda sicil (veya id) ve ad olmalı. Hiçbir kişi güncellenmedi."
     ),
+    "missing_columns": (
+        "Zorunlu sütun bulunamadı: sicil, ad. İlk satır başlık olmalı."
+    ),
     "exotic_xlsx": (
         "Bu Excel dosyası okunamadı (makro, birden fazla başlık satırı veya şifre). "
         "CSV olarak kaydedip tekrar dene."
     ),
     "unsupported_type": "Desteklenen dosyalar: Excel (xlsx), CSV veya people.json.",
     "invalid_file": "Dosya okunamadı. CSV, JSON veya basit bir Excel sayfası dene.",
+    "invalid_utf8": "Dosya UTF-8 olarak okunamadı. CSV'yi UTF-8 kaydedip tekrar dene.",
+    "invalid_csv": (
+        "CSV okunamadı. İlk satır başlık olmalı; ayraç virgül veya noktalı virgül olmalı."
+    ),
     "missing_body": "Dosya adı ve içerik (text veya contentBase64) gerekli.",
 }
-ID_HEADERS = frozenset({"id", "sicil"})
-NAME_HEADERS = frozenset({"name", "ad", "isim"})
+ID_HEADERS = frozenset({"id", "sicil", "sicil_no"})
+NAME_HEADERS = frozenset({"name", "ad", "isim", "adi_soyadi"})
 POSITION_HEADERS = frozenset({"position", "pozisyon"})
-CENTER_HEADERS = frozenset({"center", "yetkinlik"})
-EMAIL_HEADERS = frozenset({"email", "e-posta", "eposta", "e_posta"})
+CENTER_HEADERS = frozenset({"center", "yetkinlik", "yetkinlik_merkezi"})
+EMAIL_HEADERS = frozenset({"email", "e_posta", "eposta", "e_posta_adresi_is"})
+_HEADER_NON_ALNUM = re.compile(r"[^\w]+", re.UNICODE)
 ACADEMY_VERIFY_URL = (
     "https://academy.claude.com/api/"
     "anthropic.academy_public.api.v1alpha.AcademyPublicService/VerifyCertificate"
@@ -143,10 +151,21 @@ class SeriesError(ValueError):
 class RosterImportError(ValueError):
     """Invalid roster file; import_people writes nothing."""
 
-    def __init__(self, code: str, message: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str | None = None,
+        *,
+        missing: list[str] | None = None,
+        issues: list[dict] | None = None,
+        found: list[str] | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.message = message or IMPORT_MSG.get(code, IMPORT_MSG["invalid_file"])
+        self.missing = missing
+        self.issues = issues
+        self.found = found
 
 
 class AcademyUnreachable(Exception):
@@ -1407,7 +1426,9 @@ def coerce_sicil(value: object) -> str:
 
 
 def _norm_header(label: object) -> str:
-    return str(label or "").strip().casefold().replace(" ", "_")
+    text = str(label or "").strip().translate(_TR_FOLD).casefold()
+    text = _HEADER_NON_ALNUM.sub("_", text)
+    return text.strip("_")
 
 
 def header_field(label: object) -> str | None:
@@ -1425,6 +1446,36 @@ def header_field(label: object) -> str | None:
     return None
 
 
+def _require_id_name_headers(fieldnames: list) -> None:
+    """Raise missing_columns when required roster headers are absent."""
+    fields = [header_field(name) for name in fieldnames]
+    missing: list[str] = []
+    if "id" not in fields:
+        missing.append("sicil")
+    if "name" not in fields:
+        missing.append("ad")
+    if not missing:
+        return
+    found = [str(name).strip() for name in fieldnames if str(name or "").strip()]
+    found_txt = ", ".join(found) if found else "(yok)"
+    raise RosterImportError(
+        "missing_columns",
+        (
+            f"Zorunlu sütun bulunamadı: {', '.join(missing)}. "
+            f"İlk satır başlık olmalı. Bulunan: {found_txt}."
+        ),
+        missing=missing,
+        found=found,
+    )
+
+
+def _csv_delimiter(text: str) -> str:
+    first = text.splitlines()[0] if text else ""
+    if first.count(";") > first.count(","):
+        return ";"
+    return ","
+
+
 def _empty_import_row(row: dict) -> bool:
     return not any(str(row.get(k) or "").strip() for k in ("id", "name", "position", "center", "email"))
 
@@ -1432,13 +1483,21 @@ def _empty_import_row(row: dict) -> bool:
 def validate_import_rows(rows: list[dict]) -> list[dict]:
     """Require sicil/id and name on every non-empty row before any write."""
     cleaned: list[dict] = []
-    for row in rows:
+    issues: list[dict] = []
+    for index, row in enumerate(rows):
+        source_row = row.get("_row")
+        if source_row is None:
+            source_row = index + 2
         if _empty_import_row(row):
             continue
         person_id = coerce_sicil(row.get("id"))
         name = str(row.get("name") or "").strip()
         if not person_id or not name:
-            raise RosterImportError("missing_id_or_name")
+            if not person_id:
+                issues.append({"row": source_row, "field": "sicil"})
+            if not name:
+                issues.append({"row": source_row, "field": "ad"})
+            continue
         cleaned.append(
             {
                 "id": person_id,
@@ -1447,6 +1506,15 @@ def validate_import_rows(rows: list[dict]) -> list[dict]:
                 "center": str(row.get("center") or "").strip(),
                 "email": str(row.get("email") or "").strip(),
             }
+        )
+    if issues:
+        shown = issues[:5]
+        parts = [f"{item['row']}. satırda {item['field']} boş" for item in shown]
+        more = f" (+{len(issues) - 5} sorun daha)" if len(issues) > 5 else ""
+        raise RosterImportError(
+            "missing_id_or_name",
+            f"{'; '.join(parts)}{more}. Hiçbir kişi güncellenmedi.",
+            issues=issues,
         )
     by_id: dict[str, dict] = {}
     for person in cleaned:
@@ -1490,27 +1558,42 @@ def _row_from_mapped(mapped: dict) -> dict:
 def parse_roster_csv(raw: bytes) -> list[dict]:
     try:
         text = raw.decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(text))
+    except UnicodeDecodeError as err:
+        raise RosterImportError("invalid_file", IMPORT_MSG["invalid_utf8"]) from err
+    try:
+        delimiter = _csv_delimiter(text)
+        reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
         if not reader.fieldnames:
-            raise RosterImportError("invalid_file")
-        if not any(header_field(name) == "id" for name in reader.fieldnames) or not any(
-            header_field(name) == "name" for name in reader.fieldnames
-        ):
-            raise RosterImportError("invalid_file")
-        return [_row_from_mapped(row) for row in reader]
-    except (UnicodeDecodeError, csv.Error) as err:
-        raise RosterImportError("invalid_file") from err
+            raise RosterImportError(
+                "missing_columns",
+                "Zorunlu sütun bulunamadı: sicil, ad. İlk satır başlık olmalı. Bulunan: (yok).",
+                missing=["sicil", "ad"],
+                found=[],
+            )
+        _require_id_name_headers(list(reader.fieldnames))
+        rows: list[dict] = []
+        for line_no, row in enumerate(reader, start=2):
+            mapped = _row_from_mapped(row)
+            mapped["_row"] = line_no
+            rows.append(mapped)
+        return rows
+    except RosterImportError:
+        raise
+    except csv.Error as err:
+        raise RosterImportError("invalid_file", IMPORT_MSG["invalid_csv"]) from err
 
 
 def parse_roster_json(raw: bytes) -> list[dict]:
     try:
         data = json.loads(raw.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as err:
+    except UnicodeDecodeError as err:
+        raise RosterImportError("invalid_file", IMPORT_MSG["invalid_utf8"]) from err
+    except json.JSONDecodeError as err:
         raise RosterImportError("invalid_file") from err
     if not isinstance(data, list):
         raise RosterImportError("invalid_file")
     rows: list[dict] = []
-    for item in data:
+    for index, item in enumerate(data, start=1):
         if not isinstance(item, dict):
             raise RosterImportError("invalid_file")
         mapped = dict(item)
@@ -1518,7 +1601,9 @@ def parse_roster_json(raw: bytes) -> list[dict]:
             mapped["id"] = mapped.get("sicil")
         if "yetkinlik" in mapped and "center" not in mapped:
             mapped["center"] = mapped.get("yetkinlik")
-        rows.append(_row_from_mapped(mapped))
+        values = _row_from_mapped(mapped)
+        values["_row"] = index
+        rows.append(values)
     return rows
 
 
@@ -1646,9 +1731,7 @@ def parse_roster_xlsx(raw: bytes) -> list[dict]:
             max_col = max(max_col, max(cells))
     first_r = min(grid)
     headers = [grid[first_r].get(i, "").strip() for i in range(max_col + 1)]
-    fields = [header_field(h) for h in headers]
-    if "id" not in fields or "name" not in fields:
-        raise RosterImportError("exotic_xlsx")
+    _require_id_name_headers(headers)
     extra_header = False
     for row_num in sorted(grid):
         if row_num == first_r:
@@ -1663,7 +1746,9 @@ def parse_roster_xlsx(raw: bytes) -> list[dict]:
     rows: list[dict] = []
     for row_num in sorted(n for n in grid if n > first_r):
         mapped = {headers[i]: grid[row_num].get(i, "") for i in range(len(headers))}
-        rows.append(_row_from_mapped(mapped))
+        values = _row_from_mapped(mapped)
+        values["_row"] = row_num
+        rows.append(values)
     return rows
 
 
@@ -1702,7 +1787,14 @@ def import_people(conn: sqlite3.Connection, body: dict) -> tuple[int, dict]:
     try:
         people = validate_import_rows(parse_roster(filename, raw))
     except RosterImportError as err:
-        return 400, {"error": err.code, "message": err.message}
+        payload: dict = {"error": err.code, "message": err.message}
+        if err.missing is not None:
+            payload["missing"] = err.missing
+        if err.issues is not None:
+            payload["issues"] = err.issues
+        if err.found is not None:
+            payload["found"] = err.found
+        return 400, payload
     upsert_imported_people(conn, people)
     conn.commit()
     return 200, {"ok": True, "upserted": len(people)}
