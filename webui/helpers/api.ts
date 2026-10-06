@@ -29,7 +29,7 @@ export const SYNTHETIC = {
 } as const;
 
 export const VALID_CSV = "sicil,name\n10001,Ada Lovelace\n";
-export const BAD_CSV = "sicil,name\n10001,\n";
+export const BAD_CSV = "sicil,name\n,Ada Lovelace\n";
 
 export function assertNotOperatorDb(dbPath: string) {
   const operator = path.resolve(PROJECT_ROOT, "data", "attendance.db");

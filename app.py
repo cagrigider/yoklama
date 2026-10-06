@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import html
 import io
 import json
 import re
@@ -12,6 +13,7 @@ import sqlite3
 import unicodedata
 import zipfile
 from datetime import date, datetime, timedelta, timezone
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -62,19 +64,27 @@ IMPORT_MSG = {
     "missing_id_or_name": (
         "Dosyadaki her satırda sicil (veya id) ve ad olmalı. Hiçbir kişi güncellenmedi."
     ),
+    "missing_columns": (
+        "Zorunlu sütun bulunamadı: sicil, ad. İlk satır başlık olmalı."
+    ),
     "exotic_xlsx": (
         "Bu Excel dosyası okunamadı (makro, birden fazla başlık satırı veya şifre). "
         "CSV olarak kaydedip tekrar dene."
     ),
     "unsupported_type": "Desteklenen dosyalar: Excel (xlsx), CSV veya people.json.",
     "invalid_file": "Dosya okunamadı. CSV, JSON veya basit bir Excel sayfası dene.",
+    "invalid_utf8": "Dosya UTF-8 olarak okunamadı. CSV'yi UTF-8 kaydedip tekrar dene.",
+    "invalid_csv": (
+        "CSV okunamadı. İlk satır başlık olmalı; ayraç virgül veya noktalı virgül olmalı."
+    ),
     "missing_body": "Dosya adı ve içerik (text veya contentBase64) gerekli.",
 }
-ID_HEADERS = frozenset({"id", "sicil"})
-NAME_HEADERS = frozenset({"name", "ad", "isim"})
+ID_HEADERS = frozenset({"id", "sicil", "sicil_no"})
+NAME_HEADERS = frozenset({"name", "ad", "isim", "adi_soyadi"})
 POSITION_HEADERS = frozenset({"position", "pozisyon"})
-CENTER_HEADERS = frozenset({"center", "yetkinlik"})
-EMAIL_HEADERS = frozenset({"email", "e-posta", "eposta", "e_posta"})
+CENTER_HEADERS = frozenset({"center", "yetkinlik", "yetkinlik_merkezi"})
+EMAIL_HEADERS = frozenset({"email", "e_posta", "eposta", "e_posta_adresi_is"})
+_HEADER_NON_ALNUM = re.compile(r"[^\w]+", re.UNICODE)
 ACADEMY_VERIFY_URL = (
     "https://academy.claude.com/api/"
     "anthropic.academy_public.api.v1alpha.AcademyPublicService/VerifyCertificate"
@@ -85,6 +95,46 @@ VERIFY_URL_RE = re.compile(
     r"(?:https?://)?(?:www\.)?academy\.claude\.com/verify/([0-9a-fA-F]{32})\b",
     re.IGNORECASE,
 )
+SKILLJAR_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?verify\.skilljar\.com/c/([a-z0-9]+)\b",
+    re.IGNORECASE,
+)
+ISSUER_ACADEMY = "academy"
+ISSUER_SKILLJAR = "skilljar"
+ISSUER_LABELS = {
+    ISSUER_ACADEMY: "Claude Academy",
+    ISSUER_SKILLJAR: "Skilljar",
+}
+BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
+_SKILLJAR_MONTHS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
 # Fold Turkish letters before casefold so İ/I/ı and Ç/Ğ/Ö/Ş/Ü match ASCII forms.
 _TR_FOLD = str.maketrans(
     {
@@ -110,6 +160,7 @@ CREATE TABLE IF NOT EXISTS certificates (
     name TEXT NOT NULL UNIQUE,
     notes TEXT NOT NULL DEFAULT '',
     url TEXT NOT NULL DEFAULT '',
+    url2 TEXT NOT NULL DEFAULT '',
     sort INTEGER
 );
 CREATE TABLE IF NOT EXISTS person_certificates (
@@ -117,6 +168,7 @@ CREATE TABLE IF NOT EXISTS person_certificates (
     person_id TEXT NOT NULL,
     certificate_id INTEGER NOT NULL,
     verify_code TEXT NOT NULL UNIQUE,
+    issuer TEXT NOT NULL DEFAULT 'academy',
     certificate_name TEXT NOT NULL DEFAULT '',
     issued_at TEXT,
     verified_at TEXT NOT NULL,
@@ -127,8 +179,8 @@ CREATE TABLE IF NOT EXISTS person_certificates (
     FOREIGN KEY (certificate_id) REFERENCES certificates(id) ON DELETE CASCADE
 );
 """
-ACADEMY_UNREACHABLE_MSG = (
-    "Claude Academy şu an kontrol edilemedi. Bağlantını kontrol edip tekrar dene."
+CERT_UNREACHABLE_MSG = (
+    "Sertifika şu an kontrol edilemedi. Bağlantını kontrol edip tekrar dene."
 )
 
 
@@ -143,10 +195,21 @@ class SeriesError(ValueError):
 class RosterImportError(ValueError):
     """Invalid roster file; import_people writes nothing."""
 
-    def __init__(self, code: str, message: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str | None = None,
+        *,
+        missing: list[str] | None = None,
+        issues: list[dict] | None = None,
+        found: list[str] | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.message = message or IMPORT_MSG.get(code, IMPORT_MSG["invalid_file"])
+        self.missing = missing
+        self.issues = issues
+        self.found = found
 
 
 class AcademyUnreachable(Exception):
@@ -199,11 +262,30 @@ def init_db() -> None:
         """
         + CERT_SCHEMA_SQL
     )
+    ensure_cert_columns(conn)
     seed_people(conn)
     seed_meetings(conn)
     ensure_default_profile(conn)
     conn.commit()
     conn.close()
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def ensure_cert_columns(conn: sqlite3.Connection) -> None:
+    """Additive upgrades for existing DBs (url2, issuer)."""
+    cert_cols = _table_columns(conn, "certificates")
+    if cert_cols and "url2" not in cert_cols:
+        conn.execute(
+            "ALTER TABLE certificates ADD COLUMN url2 TEXT NOT NULL DEFAULT ''"
+        )
+    pc_cols = _table_columns(conn, "person_certificates")
+    if pc_cols and "issuer" not in pc_cols:
+        conn.execute(
+            "ALTER TABLE person_certificates ADD COLUMN issuer TEXT NOT NULL DEFAULT 'academy'"
+        )
 
 
 def seed_people(conn: sqlite3.Connection) -> None:
@@ -812,21 +894,32 @@ def delete_person(conn: sqlite3.Connection, person_id: str) -> tuple[int, dict]:
 
 
 def parse_verify_code(raw: str) -> str | None:
-    """Accept a 32-hex code or an academy.claude.com/verify/{code} URL."""
+    """Academy 32-hex from a URL or bare code. Prefer parse_verify_ref for Skilljar too."""
+    ref = parse_verify_ref(raw)
+    if ref is None or ref[0] != ISSUER_ACADEMY:
+        return None
+    return ref[1]
+
+
+def parse_verify_ref(raw: str) -> tuple[str, str] | None:
+    """Return (issuer, code) for Academy or Skilljar verify URLs."""
     text = (raw or "").strip()
     if not text:
         return None
-    match = VERIFY_URL_RE.search(text)
-    if match:
-        return match.group(1).lower()
+    skilljar = SKILLJAR_URL_RE.search(text)
+    if skilljar:
+        return ISSUER_SKILLJAR, skilljar.group(1).lower()
+    academy = VERIFY_URL_RE.search(text)
+    if academy:
+        return ISSUER_ACADEMY, academy.group(1).lower()
     if VERIFY_CODE_RE.fullmatch(text):
-        return text.lower()
+        return ISSUER_ACADEMY, text.lower()
     return None
 
 
 def normalize_match_text(value: str) -> str:
-    """Compare names/titles: trim, fold Turkish letters, strip accents, casefold."""
-    folded = (value or "").translate(_TR_FOLD)
+    """Compare names/titles: trim, fold Turkish letters, '&' as and, strip accents, casefold."""
+    folded = (value or "").translate(_TR_FOLD).replace("&", " and ")
     decomposed = unicodedata.normalize("NFKD", folded)
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return " ".join(stripped.casefold().split())
@@ -848,11 +941,7 @@ def fetch_academy_badge(verify_code: str) -> dict:
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
-            # Cloudflare rejects Python-urllib's default UA (error 1010).
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-            ),
+            "User-Agent": BROWSER_UA,
             "Origin": "https://academy.claude.com",
             "Referer": f"https://academy.claude.com/verify/{verify_code}",
         },
@@ -875,6 +964,135 @@ def fetch_academy_badge(verify_code: str) -> dict:
     if _academy_blocked(payload):
         raise AcademyUnreachable()
     return payload
+
+
+class _VisibleTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in ("script", "style"):
+            self._skip += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style") and self._skip:
+            self._skip -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip:
+            return
+        text = html.unescape(data).strip()
+        if text:
+            self.parts.append(text)
+
+
+def parse_skilljar_completion_date(raw: str) -> str | None:
+    """Skilljar shows 'Sept. 3, 2026' — store ISO date, no time of day."""
+    text = re.sub(r"[.,]", " ", raw or "")
+    bits = [b for b in text.split() if b]
+    if len(bits) < 3:
+        return None
+    month = _SKILLJAR_MONTHS.get(bits[0].casefold())
+    try:
+        day = int(bits[1])
+        year = int(bits[2])
+    except ValueError:
+        return None
+    if month is None:
+        return None
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return None
+
+
+def parse_skilljar_html(raw_html: str) -> dict:
+    """Public Skilljar verify page: Student, Course Completed, Completion Date."""
+    parser = _VisibleTextParser()
+    parser.feed(raw_html or "")
+    parser.close()
+    parts = parser.parts
+    lowered = [p.casefold() for p in parts]
+
+    def after(label: str) -> str:
+        try:
+            idx = lowered.index(label)
+        except ValueError:
+            return ""
+        if idx + 1 >= len(parts):
+            return ""
+        nxt = parts[idx + 1]
+        if nxt.casefold() in (
+            "student",
+            "certificate link",
+            "completion date",
+            "course completed",
+            "offered by",
+            "copy verify url",
+        ):
+            return ""
+        return nxt
+
+    name = after("student")
+    title = after("course completed")
+    issued = parse_skilljar_completion_date(after("completion date"))
+    if not name or not title:
+        return {"valid": False}
+    return {
+        "valid": True,
+        "certificateName": name,
+        "courseTitle": title,
+        "issuedAt": issued,
+        "issuer": ISSUER_SKILLJAR,
+    }
+
+
+def fetch_skilljar_badge(verify_code: str) -> dict:
+    """GET public Skilljar certificate page. Tests may replace fetch_live_badge."""
+    url = f"https://verify.skilljar.com/c/{verify_code}"
+    request = Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": BROWSER_UA,
+        },
+    )
+    try:
+        with urlopen(request, timeout=ACADEMY_TIMEOUT_SEC) as response:
+            raw = response.read()
+            status = getattr(response, "status", 200)
+    except HTTPError as err:
+        if err.code == 404:
+            return {"valid": False}
+        raise AcademyUnreachable from err
+    except (URLError, TimeoutError, OSError) as err:
+        raise AcademyUnreachable from err
+    if status >= 500:
+        raise AcademyUnreachable()
+    try:
+        html_text = raw.decode("utf-8", errors="replace")
+    except UnicodeDecodeError as err:
+        raise AcademyUnreachable from err
+    stripped = html_text.lstrip()
+    if stripped[:1] == "{":
+        payload = _decode_academy_json(raw)
+        if _academy_blocked(payload):
+            raise AcademyUnreachable()
+    low = html_text[:8000].casefold()
+    if "cloudflare" in low and (
+        "error 1010" in low or "you have been blocked" in low
+    ):
+        raise AcademyUnreachable()
+    return parse_skilljar_html(html_text)
+
+
+def fetch_live_badge(issuer: str, verify_code: str) -> dict:
+    if issuer == ISSUER_SKILLJAR:
+        return fetch_skilljar_badge(verify_code)
+    return fetch_academy_badge(verify_code)
 
 
 def _decode_academy_json(raw: bytes) -> dict:
@@ -916,12 +1134,23 @@ def _validation_field(
     return item
 
 
+def _row_text(r: sqlite3.Row, key: str, default: str = "") -> str:
+    try:
+        value = r[key]
+    except (KeyError, IndexError):
+        return default
+    if value is None:
+        return default
+    return str(value)
+
+
 def row_to_certificate(r: sqlite3.Row, extra: dict | None = None) -> dict:
     item = {
         "id": r["id"],
         "name": r["name"],
         "notes": r["notes"],
-        "url": r["url"],
+        "url": _row_text(r, "url"),
+        "url2": _row_text(r, "url2"),
         "sort": r["sort"],
     }
     if extra:
@@ -982,7 +1211,8 @@ def catalog_names(conn: sqlite3.Connection) -> list[str]:
 def certificate_holders(conn: sqlite3.Connection, certificate_id: int) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT p.id, p.name, pc.issued_at, pc.verify_code, pc.forced, pc.force_fields
+        SELECT p.id, p.name, pc.issued_at, pc.verified_at, pc.verify_code, pc.issuer,
+               pc.forced, pc.force_fields
         FROM person_certificates pc
         JOIN people p ON p.id = pc.person_id
         WHERE pc.certificate_id = ?
@@ -995,7 +1225,12 @@ def certificate_holders(conn: sqlite3.Connection, certificate_id: int) -> list[d
             "id": r["id"],
             "name": r["name"],
             "issuedAt": r["issued_at"],
+            "verifiedAt": r["verified_at"],
             "verifyCode": r["verify_code"],
+            "issuer": _row_text(r, "issuer", ISSUER_ACADEMY),
+            "issuerLabel": ISSUER_LABELS.get(
+                _row_text(r, "issuer", ISSUER_ACADEMY), ISSUER_LABELS[ISSUER_ACADEMY]
+            ),
             "forced": bool(r["forced"]),
             "forceFields": parse_force_fields(r["force_fields"]),
         }
@@ -1036,16 +1271,19 @@ def get_certificate(conn: sqlite3.Connection, certificate_id: int) -> dict | Non
 
 
 def insert_certificate(conn: sqlite3.Connection, body: dict) -> tuple[int, dict]:
-    """POST /api/certificates — {name, notes?, url?}."""
+    """POST /api/certificates — {name, notes?, url? / url1?, url2?}."""
     name = optional_person_field(body, "name")
     if not name:
         return 400, {"error": "missing_name"}
     notes = optional_person_field(body, "notes")
     url = optional_person_field(body, "url")
+    if not url:
+        url = optional_person_field(body, "url1")
+    url2 = optional_person_field(body, "url2")
     try:
         cur = conn.execute(
-            "INSERT INTO certificates (name, notes, url) VALUES (?, ?, ?)",
-            (name, notes, url),
+            "INSERT INTO certificates (name, notes, url, url2) VALUES (?, ?, ?, ?)",
+            (name, notes, url, url2),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -1067,11 +1305,14 @@ def update_certificate(
     if not name:
         return 400, {"error": "missing_name"}
     notes = optional_person_field(body, "notes", existing["notes"])
-    url = optional_person_field(body, "url", existing["url"])
+    url = optional_person_field(body, "url", _row_text(existing, "url"))
+    if "url1" in body and "url" not in body:
+        url = optional_person_field(body, "url1", url)
+    url2 = optional_person_field(body, "url2", _row_text(existing, "url2"))
     try:
         conn.execute(
-            "UPDATE certificates SET name = ?, notes = ?, url = ? WHERE id = ?",
-            (name, notes, url, certificate_id),
+            "UPDATE certificates SET name = ?, notes = ?, url = ?, url2 = ? WHERE id = ?",
+            (name, notes, url, url2, certificate_id),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -1102,12 +1343,16 @@ def parse_force_fields(raw: str) -> list[str]:
 
 
 def row_to_assignment(r: sqlite3.Row) -> dict:
+    issuer = _row_text(r, "issuer", ISSUER_ACADEMY)
     return {
         "id": r["id"],
         "certificateId": r["certificate_id"],
         "name": r["catalog_name"],
         "url": r["catalog_url"],
+        "url2": _row_text(r, "catalog_url2"),
         "verifyCode": r["verify_code"],
+        "issuer": issuer,
+        "issuerLabel": ISSUER_LABELS.get(issuer, ISSUER_LABELS[ISSUER_ACADEMY]),
         "certificateName": r["certificate_name"],
         "issuedAt": r["issued_at"],
         "verifiedAt": r["verified_at"],
@@ -1119,7 +1364,7 @@ def row_to_assignment(r: sqlite3.Row) -> dict:
 def person_certificate_rows(conn: sqlite3.Connection, person_id: str) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT pc.*, c.name AS catalog_name, c.url AS catalog_url
+        SELECT pc.*, c.name AS catalog_name, c.url AS catalog_url, c.url2 AS catalog_url2
         FROM person_certificates pc
         JOIN certificates c ON c.id = pc.certificate_id
         WHERE pc.person_id = ?
@@ -1135,7 +1380,7 @@ def _assignment_payload(
 ) -> dict | None:
     row = conn.execute(
         """
-        SELECT pc.*, c.name AS catalog_name, c.url AS catalog_url
+        SELECT pc.*, c.name AS catalog_name, c.url AS catalog_url, c.url2 AS catalog_url2
         FROM person_certificates pc
         JOIN certificates c ON c.id = pc.certificate_id
         WHERE pc.person_id = ? AND pc.certificate_id = ?
@@ -1154,16 +1399,16 @@ def add_person_certificate(
     *,
     fetcher=None,
 ) -> tuple[int, dict]:
-    """POST /api/people/{id}/certificates — live Academy check, then name and catalog title."""
+    """POST /api/people/{id}/certificates — live Academy/Skilljar check, then name and catalog title."""
     person = conn.execute("SELECT * FROM people WHERE id = ?", (person_id,)).fetchone()
     if person is None:
         return 404, {"error": "not_found"}
     raw = body.get("url")
     if raw is None:
         raw = body.get("verifyCode")
-    code = parse_verify_code("" if raw is None else str(raw))
+    ref = parse_verify_ref("" if raw is None else str(raw))
     fields: list[dict] = []
-    if not code:
+    if ref is None:
         fields.append(
             _validation_field(
                 "verifyCode",
@@ -1177,6 +1422,7 @@ def add_person_certificate(
             "forceAllowed": False,
             "fields": fields,
         }
+    issuer, code = ref
 
     holder = conn.execute(
         """
@@ -1188,11 +1434,10 @@ def add_person_certificate(
         (code,),
     ).fetchone()
 
-    get_badge = fetcher or fetch_academy_badge
     try:
-        badge = get_badge(code)
+        badge = fetcher(code) if fetcher else fetch_live_badge(issuer, code)
     except AcademyUnreachable:
-        return 503, {"error": "academy_unreachable", "message": ACADEMY_UNREACHABLE_MSG}
+        return 503, {"error": "academy_unreachable", "message": CERT_UNREACHABLE_MSG}
 
     valid = isinstance(badge, dict) and badge.get("valid") is True
     academy_name = str((badge or {}).get("certificateName") or "") if valid else ""
@@ -1301,14 +1546,15 @@ def add_person_certificate(
         conn.execute(
             """
             INSERT INTO person_certificates (
-                person_id, certificate_id, verify_code, certificate_name,
+                person_id, certificate_id, verify_code, issuer, certificate_name,
                 issued_at, verified_at, forced, force_fields
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 person_id,
                 catalog_id,
                 code,
+                issuer,
                 academy_name,
                 issued_at,
                 verified_at,
@@ -1407,7 +1653,9 @@ def coerce_sicil(value: object) -> str:
 
 
 def _norm_header(label: object) -> str:
-    return str(label or "").strip().casefold().replace(" ", "_")
+    text = str(label or "").strip().translate(_TR_FOLD).casefold()
+    text = _HEADER_NON_ALNUM.sub("_", text)
+    return text.strip("_")
 
 
 def header_field(label: object) -> str | None:
@@ -1425,6 +1673,36 @@ def header_field(label: object) -> str | None:
     return None
 
 
+def _require_id_name_headers(fieldnames: list) -> None:
+    """Raise missing_columns when required roster headers are absent."""
+    fields = [header_field(name) for name in fieldnames]
+    missing: list[str] = []
+    if "id" not in fields:
+        missing.append("sicil")
+    if "name" not in fields:
+        missing.append("ad")
+    if not missing:
+        return
+    found = [str(name).strip() for name in fieldnames if str(name or "").strip()]
+    found_txt = ", ".join(found) if found else "(yok)"
+    raise RosterImportError(
+        "missing_columns",
+        (
+            f"Zorunlu sütun bulunamadı: {', '.join(missing)}. "
+            f"İlk satır başlık olmalı. Bulunan: {found_txt}."
+        ),
+        missing=missing,
+        found=found,
+    )
+
+
+def _csv_delimiter(text: str) -> str:
+    first = text.splitlines()[0] if text else ""
+    if first.count(";") > first.count(","):
+        return ";"
+    return ","
+
+
 def _empty_import_row(row: dict) -> bool:
     return not any(str(row.get(k) or "").strip() for k in ("id", "name", "position", "center", "email"))
 
@@ -1432,13 +1710,21 @@ def _empty_import_row(row: dict) -> bool:
 def validate_import_rows(rows: list[dict]) -> list[dict]:
     """Require sicil/id and name on every non-empty row before any write."""
     cleaned: list[dict] = []
-    for row in rows:
+    issues: list[dict] = []
+    for index, row in enumerate(rows):
+        source_row = row.get("_row")
+        if source_row is None:
+            source_row = index + 2
         if _empty_import_row(row):
             continue
         person_id = coerce_sicil(row.get("id"))
         name = str(row.get("name") or "").strip()
         if not person_id or not name:
-            raise RosterImportError("missing_id_or_name")
+            if not person_id:
+                issues.append({"row": source_row, "field": "sicil"})
+            if not name:
+                issues.append({"row": source_row, "field": "ad"})
+            continue
         cleaned.append(
             {
                 "id": person_id,
@@ -1447,6 +1733,15 @@ def validate_import_rows(rows: list[dict]) -> list[dict]:
                 "center": str(row.get("center") or "").strip(),
                 "email": str(row.get("email") or "").strip(),
             }
+        )
+    if issues:
+        shown = issues[:5]
+        parts = [f"{item['row']}. satırda {item['field']} boş" for item in shown]
+        more = f" (+{len(issues) - 5} sorun daha)" if len(issues) > 5 else ""
+        raise RosterImportError(
+            "missing_id_or_name",
+            f"{'; '.join(parts)}{more}. Hiçbir kişi güncellenmedi.",
+            issues=issues,
         )
     by_id: dict[str, dict] = {}
     for person in cleaned:
@@ -1490,27 +1785,42 @@ def _row_from_mapped(mapped: dict) -> dict:
 def parse_roster_csv(raw: bytes) -> list[dict]:
     try:
         text = raw.decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(text))
+    except UnicodeDecodeError as err:
+        raise RosterImportError("invalid_file", IMPORT_MSG["invalid_utf8"]) from err
+    try:
+        delimiter = _csv_delimiter(text)
+        reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
         if not reader.fieldnames:
-            raise RosterImportError("invalid_file")
-        if not any(header_field(name) == "id" for name in reader.fieldnames) or not any(
-            header_field(name) == "name" for name in reader.fieldnames
-        ):
-            raise RosterImportError("invalid_file")
-        return [_row_from_mapped(row) for row in reader]
-    except (UnicodeDecodeError, csv.Error) as err:
-        raise RosterImportError("invalid_file") from err
+            raise RosterImportError(
+                "missing_columns",
+                "Zorunlu sütun bulunamadı: sicil, ad. İlk satır başlık olmalı. Bulunan: (yok).",
+                missing=["sicil", "ad"],
+                found=[],
+            )
+        _require_id_name_headers(list(reader.fieldnames))
+        rows: list[dict] = []
+        for line_no, row in enumerate(reader, start=2):
+            mapped = _row_from_mapped(row)
+            mapped["_row"] = line_no
+            rows.append(mapped)
+        return rows
+    except RosterImportError:
+        raise
+    except csv.Error as err:
+        raise RosterImportError("invalid_file", IMPORT_MSG["invalid_csv"]) from err
 
 
 def parse_roster_json(raw: bytes) -> list[dict]:
     try:
         data = json.loads(raw.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as err:
+    except UnicodeDecodeError as err:
+        raise RosterImportError("invalid_file", IMPORT_MSG["invalid_utf8"]) from err
+    except json.JSONDecodeError as err:
         raise RosterImportError("invalid_file") from err
     if not isinstance(data, list):
         raise RosterImportError("invalid_file")
     rows: list[dict] = []
-    for item in data:
+    for index, item in enumerate(data, start=1):
         if not isinstance(item, dict):
             raise RosterImportError("invalid_file")
         mapped = dict(item)
@@ -1518,7 +1828,9 @@ def parse_roster_json(raw: bytes) -> list[dict]:
             mapped["id"] = mapped.get("sicil")
         if "yetkinlik" in mapped and "center" not in mapped:
             mapped["center"] = mapped.get("yetkinlik")
-        rows.append(_row_from_mapped(mapped))
+        values = _row_from_mapped(mapped)
+        values["_row"] = index
+        rows.append(values)
     return rows
 
 
@@ -1646,9 +1958,7 @@ def parse_roster_xlsx(raw: bytes) -> list[dict]:
             max_col = max(max_col, max(cells))
     first_r = min(grid)
     headers = [grid[first_r].get(i, "").strip() for i in range(max_col + 1)]
-    fields = [header_field(h) for h in headers]
-    if "id" not in fields or "name" not in fields:
-        raise RosterImportError("exotic_xlsx")
+    _require_id_name_headers(headers)
     extra_header = False
     for row_num in sorted(grid):
         if row_num == first_r:
@@ -1663,7 +1973,9 @@ def parse_roster_xlsx(raw: bytes) -> list[dict]:
     rows: list[dict] = []
     for row_num in sorted(n for n in grid if n > first_r):
         mapped = {headers[i]: grid[row_num].get(i, "") for i in range(len(headers))}
-        rows.append(_row_from_mapped(mapped))
+        values = _row_from_mapped(mapped)
+        values["_row"] = row_num
+        rows.append(values)
     return rows
 
 
@@ -1702,7 +2014,14 @@ def import_people(conn: sqlite3.Connection, body: dict) -> tuple[int, dict]:
     try:
         people = validate_import_rows(parse_roster(filename, raw))
     except RosterImportError as err:
-        return 400, {"error": err.code, "message": err.message}
+        payload: dict = {"error": err.code, "message": err.message}
+        if err.missing is not None:
+            payload["missing"] = err.missing
+        if err.issues is not None:
+            payload["issues"] = err.issues
+        if err.found is not None:
+            payload["found"] = err.found
+        return 400, payload
     upsert_imported_people(conn, people)
     conn.commit()
     return 200, {"ok": True, "upserted": len(people)}

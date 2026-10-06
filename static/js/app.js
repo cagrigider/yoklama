@@ -48,12 +48,22 @@ const SETTINGS_COPY = {
 
 const IMPORT_COPY = {
   title: "Kişi listesi aktar",
-  hint: "Excel (basit ilk sayfa), CSV veya people.json. Zorunlu: sicil veya id, ve ad. İsteğe bağlı: pozisyon, yetkinlik. E-posta varsa kaydedilir.",
+  hint: "Excel, CSV veya people.json. Zorunlu sütunlar ve örnek için Format.",
   optional: "İsteğe bağlı — boş bırakabilirsin.",
+  format: "Format",
+  formatTitle: "Aktarım formatı",
+  formatClose: "Tamam",
+  formatRules:
+    "İlk satır başlık olmalı. Dosya UTF-8 olsun; ayraç virgül veya noktalı virgül. Zorunlu: sicil ve ad. İsteğe bağlı: pozisyon, yetkinlik, e-posta.",
+  formatHeaders:
+    "Kabul edilen başlıklar — Sicil: sicil, Sicil No, id · Ad: name, Adı Soyadı, ad · Pozisyon: position, Pozisyon · Yetkinlik: center, Yetkinlik Merkezi · E-posta: email, E-posta Adresi (İş).",
+  formatSample: `Sicil No,Adı Soyadı,Pozisyon,Yetkinlik Merkezi,E-posta Adresi (İş)
+10001,Örnek Kişi,Software Developer,Example,ornek@example.com`,
   pick: "Dosya seç",
   import: "Aktar",
   ok: "Kişiler aktarıldı",
   missing: "Dosyadaki her satırda sicil ve ad olmalı. Hiçbir kişi güncellenmedi.",
+  missingColumns: "Zorunlu sütun bulunamadı: sicil, ad. İlk satır başlık olmalı.",
   exotic: "Bu Excel dosyası okunamadı (makro, birden fazla başlık satırı veya şifre). CSV olarak kaydedip tekrar dene.",
   unsupported: "Desteklenen dosyalar: Excel (xlsx), CSV veya people.json.",
   invalid: "Dosya okunamadı. CSV, JSON veya basit bir Excel sayfası dene.",
@@ -95,16 +105,17 @@ const PEOPLE_COPY = {
 
 const CERT_COPY = {
   title: "Sertifikalar",
-  sub: "Takip ettiğin kursları ekle. Kim aldığını Academy doğrulama bağlantısıyla kaydet.",
+  sub: "Takip ettiğin kursları ekle. Kim aldığını Claude Academy veya Skilljar doğrulama bağlantısıyla kaydet.",
   add: "Sertifika ekle",
   edit: "Düzenle",
   remove: "Sil",
   save: "Kaydet",
   cancel: "Vazgeç",
   name: "Sertifika adı",
-  nameHint: "Academy’deki kurs başlığıyla aynı yaz.",
+  nameHint: "Kurs başlığıyla aynı yaz (Academy veya Skilljar).",
   notes: "Not",
-  url: "Kurs bağlantısı",
+  url: "Bağlantı 1",
+  url2: "Bağlantı 2",
   empty: "Henüz sertifika yok. Takip etmek istediğin kursu ekle.",
   holders: "Aldı",
   missing: "Almadı",
@@ -121,16 +132,16 @@ const CERT_COPY = {
   addTitle: "Sertifika ekle",
   editTitle: "Sertifikayı düzenle",
   personAdd: "Sertifika ekle",
-  personHint: "Academy doğrulama bağlantısını veya 32 karakterlik kodu yapıştır.",
+  personHint: "Claude Academy veya Skilljar doğrulama bağlantısını yapıştır.",
   personUrl: "Doğrulama bağlantısı",
   personSave: "Kontrol et ve kaydet",
   personEmpty: "Henüz sertifika kaydı yok.",
-  issued: "Veriliş",
+  issued: "Alındı",
   forced: "Elle onaylandı",
   validationTitle: "Kayıt yapılmadı. Kontrol etmen gereken alanlar:",
   force: "Yine de kaydet",
   assigned: "Sertifika kaydedildi",
-  unreachable: "Claude Academy şu an kontrol edilemedi. Tekrar dene.",
+  unreachable: "Sertifika şu an kontrol edilemedi. Tekrar dene.",
   removeAssign: "Kaldır",
   back: "Sertifikalar",
 };
@@ -140,7 +151,7 @@ function certCountLabel(have, total) {
 }
 
 function certProblemText(problem) {
-  if (problem === "not exist") return "Academy’de bulunamadı";
+  if (problem === "not exist") return "doğrulama sayfasında bulunamadı";
   if (problem === "listede yok") return "takip listesinde yok";
   return problem;
 }
@@ -253,6 +264,33 @@ function confirmDialog({ title, body, confirmLabel = "Sil", danger = true }) {
   });
 }
 
+function importFormatDialog() {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal-back";
+    wrap.innerHTML = `
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="import-format-title">
+        <h3 id="import-format-title">${escapeHtml(IMPORT_COPY.formatTitle)}</h3>
+        <p>${escapeHtml(IMPORT_COPY.formatRules)}</p>
+        <p>${escapeHtml(IMPORT_COPY.formatHeaders)}</p>
+        <pre class="import-sample">${escapeHtml(IMPORT_COPY.formatSample)}</pre>
+        <div class="modal-actions">
+          <button type="button" class="btn primary" data-ok>${escapeHtml(IMPORT_COPY.formatClose)}</button>
+        </div>
+      </div>`;
+    const finish = () => {
+      wrap.remove();
+      resolve();
+    };
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) finish();
+    });
+    wrap.querySelector("[data-ok]").addEventListener("click", finish);
+    document.body.appendChild(wrap);
+    wrap.querySelector("[data-ok]").focus();
+  });
+}
+
 function meetingEditorFields(m) {
   return `
     <input name="title" value="${escapeHtml(m.title)}" required />
@@ -349,10 +387,11 @@ async function postRosterImport(file) {
 }
 
 function importErrorText(err) {
-  if (err.code === "missing_id_or_name") return IMPORT_COPY.missing;
+  if (err.code === "missing_id_or_name") return err.message || IMPORT_COPY.missing;
+  if (err.code === "missing_columns") return err.message || IMPORT_COPY.missingColumns;
   if (err.code === "exotic_xlsx") return IMPORT_COPY.exotic;
   if (err.code === "unsupported_type") return IMPORT_COPY.unsupported;
-  if (err.code === "invalid_file") return IMPORT_COPY.invalid;
+  if (err.code === "invalid_file") return err.message || IMPORT_COPY.invalid;
   if (err.code === "missing_body") return IMPORT_COPY.missingBody;
   return err.message || IMPORT_COPY.failed;
 }
@@ -361,10 +400,21 @@ function rosterFileFieldHtml(inputId, { optional = false } = {}) {
   const hint = optional ? `${IMPORT_COPY.optional} ${IMPORT_COPY.hint}` : IMPORT_COPY.hint;
   return `
       <div class="field">
-        <span class="field-label">${IMPORT_COPY.title}</span>
+        <div class="field-label-row">
+          <span class="field-label">${IMPORT_COPY.title}</span>
+          <button type="button" class="btn ghost btn-compact" data-import-format>${escapeHtml(IMPORT_COPY.format)}</button>
+        </div>
         <span class="field-hint">${escapeHtml(hint)}</span>
         <input type="file" id="${escapeHtml(inputId)}" accept=".xlsx,.csv,.json,.xls,.xlsm" />
       </div>`;
+}
+
+function bindImportFormatButtons(root) {
+  root.querySelectorAll("[data-import-format]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      importFormatDialog();
+    });
+  });
 }
 
 function wizardRepeatButtons(selected) {
@@ -483,7 +533,9 @@ async function renderWizard() {
       </div>
     </form>
   `;
-  bindWizardForm($app.querySelector("#wizard-form"));
+  const wizardForm = $app.querySelector("#wizard-form");
+  bindWizardForm(wizardForm);
+  bindImportFormatButtons(wizardForm);
 }
 
 function bindSettingsForm(form) {
@@ -506,6 +558,7 @@ function fillSettingsImport(host) {
       <button type="button" class="btn primary" id="settings-import-btn">${IMPORT_COPY.import}</button>
     </div>
   `;
+  bindImportFormatButtons(host);
   const errorEl = host.querySelector("#settings-import-error");
   const showError = (text) => {
     errorEl.hidden = !text;
@@ -1110,20 +1163,57 @@ async function renderCertificates() {
 }
 
 function personMiniRow(p, extra = "") {
+  const meta = extra ? `<p class="meta">${extra}</p>` : "";
   return `
     <a class="meeting-card" href="#/people/${encodeURIComponent(p.id)}">
       <div>
         <p class="meeting-title">${escapeHtml(p.name)}</p>
-        <p class="meta">${escapeHtml(p.id)}${extra ? " · " + extra : ""}</p>
+        ${meta}
       </div>
     </a>`;
 }
 
+function certIssuerLine(record) {
+  const label = (record && record.issuerLabel) || "";
+  return label ? `<p class="meta cert-issuer">${escapeHtml(label)}</p>` : "";
+}
+
+function certLinkLines(cert) {
+  const items = [
+    [CERT_COPY.url, cert.url],
+    [CERT_COPY.url2, cert.url2],
+  ].filter(([, href]) => (href || "").trim());
+  if (!items.length) return "";
+  return `<div class="cert-links">${items
+    .map(
+      ([label, href]) =>
+        `<p class="cert-link">${escapeHtml(label)}: <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(href)}</a></p>`
+    )
+    .join("")}</div>`;
+}
+
 function formatIssued(iso) {
   if (!iso) return "";
-  const day = String(iso).slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return escapeHtml(iso);
-  return fmtDate(day);
+  const text = String(iso);
+  const day = text.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day) && text.length <= 10) return fmtDate(day);
+  const instant = Date.parse(text);
+  if (!Number.isNaN(instant)) {
+    return new Intl.DateTimeFormat("tr-TR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(instant));
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return fmtDate(day);
+  return escapeHtml(text);
+}
+
+function certWhenLabel(record) {
+  const when = formatIssued(record.issuedAt || record.verifiedAt);
+  return when ? `${CERT_COPY.issued}: ${when}` : "";
 }
 
 async function renderCertificateDetail(id) {
@@ -1131,15 +1221,15 @@ async function renderCertificateDetail(id) {
   const holders = cert.holders || [];
   const missing = cert.missing || [];
   const notes = cert.notes ? `<p class="sub">${escapeHtml(cert.notes)}</p>` : "";
-  const urlLine = cert.url
-    ? `<p class="sub"><a class="link-quiet" href="${escapeHtml(cert.url)}" target="_blank" rel="noopener">${escapeHtml(cert.url)}</a></p>`
-    : "";
+  const urlLine = certLinkLines(cert);
   const holderRows = holders.length
     ? holders
         .map((p) => {
-          const issued = p.issuedAt ? formatIssued(p.issuedAt) : "";
-          const forced = p.forced ? ` · ${CERT_COPY.forced}` : "";
-          return personMiniRow(p, `${issued}${forced}`);
+          const when = certWhenLabel(p);
+          const issuer = (p.issuerLabel || "").trim();
+          const forced = p.forced ? CERT_COPY.forced : "";
+          const extra = [issuer, when, forced].filter(Boolean).join(" · ");
+          return personMiniRow(p, extra);
         })
         .join("")
     : `<p class="empty">${cert.peopleCount === 0 ? CERT_COPY.noPeople : CERT_COPY.holdersEmpty}</p>`;
@@ -1173,7 +1263,7 @@ async function renderCertificateDetail(id) {
 
 async function renderCertificateForm(editId) {
   const editing = Boolean(editId);
-  let cert = { name: "", notes: "", url: "" };
+  let cert = { name: "", notes: "", url: "", url2: "" };
   if (editing) {
     cert = await api(`/api/certificates/${editId}`);
   }
@@ -1192,6 +1282,7 @@ async function renderCertificateForm(editId) {
         <textarea id="cert-notes" name="notes" rows="3">${escapeHtml(cert.notes || "")}</textarea>
       </label>
       ${personFormField({ name: "url", label: CERT_COPY.url, value: cert.url || "" })}
+      ${personFormField({ name: "url2", label: CERT_COPY.url2, value: cert.url2 || "" })}
       <p class="form-error" id="cert-form-error" hidden></p>
       <div class="modal-actions">
         <a class="btn ghost" href="#/certificates">${CERT_COPY.cancel}</a>
@@ -1217,6 +1308,7 @@ async function renderCertificateForm(editId) {
       name,
       notes: (data.notes || "").trim(),
       url: (data.url || "").trim(),
+      url2: (data.url2 || "").trim(),
     };
     try {
       if (editing) {
@@ -1421,7 +1513,7 @@ async function renderPerson(id) {
   const certRows = certs.length
     ? certs
         .map((c) => {
-          const issued = c.issuedAt ? formatIssued(c.issuedAt) : "";
+          const when = certWhenLabel(c);
           const forced = c.forced
             ? `<span class="chip">${CERT_COPY.forced}</span>`
             : "";
@@ -1430,7 +1522,8 @@ async function renderPerson(id) {
           <a class="meeting-card-main" href="#/certificates/${c.certificateId}">
             <div>
               <p class="meeting-title">${escapeHtml(c.name)}</p>
-              <p class="meta">${issued ? CERT_COPY.issued + ": " + issued : escapeHtml(c.verifyCode)}</p>
+              ${certIssuerLine(c)}
+              <p class="meta">${when || escapeHtml(c.verifyCode)}</p>
             </div>
             ${forced}
           </a>

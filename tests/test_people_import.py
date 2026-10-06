@@ -22,7 +22,7 @@ for _p in (_ROOT, _TESTS):
         sys.path.insert(0, _s)
 
 import app
-from app import IMPORT_MSG, fill_gap_meetings, import_people, insert_person, upsert_group_profile
+from app import fill_gap_meetings, import_people, insert_person, upsert_group_profile
 from tempdb import IsolatedDbTestCase
 
 # Synthetic roster only (RFC 2606). Never copied from seed/people.json.
@@ -223,12 +223,57 @@ class PeopleImportTest(IsolatedDbTestCase):
             _import_body("people.json", json.dumps([{"id": "90003"}])),
         )
 
-        for code, payload in (missing_name, missing_sicil, missing_json_name):
-            self.assertEqual(code, 400)
-            self.assertEqual(payload["error"], "missing_id_or_name")
-            self.assertEqual(payload["message"], IMPORT_MSG["missing_id_or_name"])
+        self.assertEqual(missing_name[0], 400)
+        self.assertEqual(missing_name[1]["error"], "missing_id_or_name")
+        self.assertIn("2", missing_name[1]["message"])
+        self.assertIn("ad", missing_name[1]["message"])
+        self.assertEqual(missing_name[1]["issues"], [{"row": 2, "field": "ad"}])
+
+        self.assertEqual(missing_sicil[0], 400)
+        self.assertEqual(missing_sicil[1]["error"], "missing_id_or_name")
+        self.assertIn("2", missing_sicil[1]["message"])
+        self.assertIn("sicil", missing_sicil[1]["message"])
+        self.assertEqual(missing_sicil[1]["issues"], [{"row": 2, "field": "sicil"}])
+
+        self.assertEqual(missing_json_name[0], 400)
+        self.assertEqual(missing_json_name[1]["error"], "missing_id_or_name")
+        self.assertIn("1", missing_json_name[1]["message"])
+        self.assertEqual(missing_json_name[1]["issues"], [{"row": 1, "field": "ad"}])
+
         self.assertEqual(self.people_rows(), before)
         self.assertEqual(self._by_id()["90001"]["name"], "Alex Example")
+
+    def test_readme_headers_and_semicolon_csv_import(self) -> None:
+        readme_csv = (
+            "Sicil No,Adı Soyadı,Pozisyon,Yetkinlik Merkezi,E-posta Adresi (İş)\n"
+            "10001,Örnek Kişi,Software Developer,Example,ornek@example.com\n"
+        )
+        code, payload = import_people(self.conn, _import_body("roster.csv", readme_csv))
+        self.assertEqual(code, 200)
+        self.assertEqual(payload, {"ok": True, "upserted": 1})
+        person = self._by_id()["10001"]
+        self.assertEqual(person["name"], "Örnek Kişi")
+        self.assertEqual(person["position"], "Software Developer")
+        self.assertEqual(person["center"], "Example")
+        self.assertEqual(person["email"], "ornek@example.com")
+
+        semi_csv = "Sicil No;Adı Soyadı\n10002;Ada Example\n"
+        code2, payload2 = import_people(self.conn, _import_body("roster.csv", semi_csv))
+        self.assertEqual(code2, 200)
+        self.assertEqual(payload2, {"ok": True, "upserted": 1})
+        self.assertEqual(self._by_id()["10002"]["name"], "Ada Example")
+
+    def test_missing_columns_reports_found_headers(self) -> None:
+        code, payload = import_people(
+            self.conn,
+            _import_body("bad.csv", "foo,bar\n1,2\n"),
+        )
+        self.assertEqual(code, 400)
+        self.assertEqual(payload["error"], "missing_columns")
+        self.assertEqual(payload["missing"], ["sicil", "ad"])
+        self.assertEqual(payload["found"], ["foo", "bar"])
+        self.assertIn("Bulunan: foo, bar", payload["message"])
+        self.assertEqual(self.people_rows(), [])
 
     def test_duplicate_ids_in_file_last_row_wins(self) -> None:
         # Product (validate_import_rows): duplicate sicil/id is last-row-wins.
@@ -326,6 +371,8 @@ class PeopleImportTest(IsolatedDbTestCase):
         )
         self.assertEqual(bad_code, 400)
         self.assertEqual(bad_payload["error"], "missing_id_or_name")
+        self.assertIn("2", bad_payload["message"])
+        self.assertEqual(bad_payload["issues"], [{"row": 2, "field": "ad"}])
         self.assertEqual(self.meeting_dates(), before_dates)
         self.assertEqual(dict(self.profile_row()), before_profile)
         self.assertEqual(self.profile_count(), 1)

@@ -31,9 +31,15 @@ test.describe("certificates UI", () => {
     await expect(page.getByText("Henüz sertifika yok")).toBeVisible();
 
     await page.getByRole("link", { name: "Sertifika ekle" }).click();
+    await expect(page.getByLabel("Bağlantı 1")).toBeVisible();
+    await expect(page.getByLabel("Bağlantı 2")).toBeVisible();
     await page.getByLabel(/Sertifika adı/).fill("Building with the Claude API");
+    await page.getByLabel("Bağlantı 1").fill("https://academy.claude.com/courses/claude-api");
+    await page.getByLabel("Bağlantı 2").fill("https://anthropic.skilljar.com/claude-101");
     await page.getByRole("button", { name: "Kaydet" }).click();
     await expect(page.getByRole("heading", { name: "Building with the Claude API" })).toBeVisible();
+    await expect(page.getByText("Bağlantı 1:")).toBeVisible();
+    await expect(page.getByText("Bağlantı 2:")).toBeVisible();
     await expect(page.getByText("0 / 2 kişi aldı")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Aldı" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Almadı" })).toBeVisible();

@@ -26,6 +26,7 @@ Yoklama, toplantı sırasında yoklama tutmak için **yerel** bir web uygulamas�
 - İlk açılışta kısa kurulum (grup adı, ilk tarih, tekrar)
 - Excel / CSV / JSON ile kişi listesi aktarımı
 - Canlı oturum, kişi geçmişi, yönetici özeti
+- Claude Academy ve Skilljar sertifikaları: takip listesi, iki bağlantı, kim aldı
 - `git pull` senin `data/attendance.db` dosyanı silmez
 
 Ekran görsellerindeki isimler örnektir (`Ayşe Örnek`, `example.com`). Gerçek sicil, ad veya e-posta git’e **konmaz**.
@@ -64,7 +65,7 @@ python3 --version
 
 ## İlk açılış
 
-Boş bir veritabanında ilk ekran **Grubunu ayarla** sihirbazıdır. Toplantılar / Kişiler / Ayarlar, profil kaydedilene kadar kilitlidir.
+Boş bir veritabanında ilk ekran **Grubunu ayarla** sihirbazıdır. Toplantılar / Kişiler / Sertifikalar / Ayarlar, profil kaydedilene kadar kilitlidir.
 
 1. **Grup adı** yaz (ör. `Grup 5`).
 2. İstersen kare bir **grup görseli** seç (PNG, JPEG veya WebP, en fazla 150 KB).
@@ -114,12 +115,31 @@ Toplantı kartına tıkla. Arama kutusundan isim veya yetkinlik süz. Her kişi 
 
 ### Kişiler
 
-Listede katılım oranı görünür. **Kişi ekle** ile tek tek ekleyebilir, **Düzenle** / **Sil** ile güncelleyebilirsin. Bir kişinin **geçmiş** linki oturum oturum kaydı gösterir. Yönetici “geldi mi, aktif miydi?” diye sorunca buradan bakıp özeti kopyalarsın.
+Listede katılım oranı görünür. **Kişi ekle** ile tek tek ekleyebilir, **Düzenle** / **Sil** ile güncelleyebilirsin. Bir kişinin **geçmiş** linki oturum oturum kaydı ve sertifikalarını gösterir. Yönetici “geldi mi, aktif miydi?” diye sorunca buradan bakıp özeti kopyalarsın.
 
 <p align="center">
   <img src="docs/screenshots/03-kisiler.png" alt="Kişiler listesi" width="780">
 </p>
 <p align="center"><em>Kişiler — katılım oranı, arama, ekle / düzenle / sil.</em></p>
+
+### Sertifikalar
+
+Üst menüdeki **Sertifikalar** ile grubun bitirmesini istediğin kursları takip edersin (Claude Academy veya Skilljar). Liste boş başlar; sen kurs adını eklersin. Ad, doğrulama sayfasındaki **kurs başlığıyla aynı** olmalı (ör. `Building with the Claude API`). İstersen not ve en fazla iki bağlantı yazılır (**Bağlantı 1**, **Bağlantı 2**); boş olanlar kartta görünmez.
+
+Her kart **kaç kişi aldı / toplam** gösterir. Karta tıklayınca **Aldı** ve **Almadı** listeleri çıkar; listelerde yalnız ad soyad görünür. Aldıysa alınış tarihi (Academy’de saat de) ve rozetin kaynağı (**Claude Academy** veya **Skilljar**) yazılır. Aynı bilgi kişi sayfasındaki sertifika kartında da durur.
+
+Kişi sayfasında **Doğrulama bağlantısı** alanına Academy veya Skilljar sertifika linkini yapıştır:
+
+```text
+https://academy.claude.com/verify/547e3a740ac9226a1a1bcfebfaa13e8c
+https://verify.skilljar.com/c/arswnpvi6erm
+```
+
+Academy için yalnız kod da olur (32 karakter). **Kontrol et ve kaydet** doğrulama sayfasından bakar: rozet gerçek mi, isim kişiyle uyuyor mu, kurs senin listendeki bir ada denk geliyor mu. Aynı doğrulama kodu bu gruptaki başka birine ikinci kez yazılamaz.
+
+Eşleşmeyen alanlar kaydedilmez; ekranda hangisinin tutmadığı yazılır. **Yine de kaydet** yalnız isim veya kurs adı uyuşmazlığında çıkar. Sahte / silinmiş rozet, başkasının kullandığı kod veya doğrulama sitesine ulaşılamaması zorlanamaz.
+
+Rozet üzerindeki isim sağlayıcıda değiştirilebilir; asıl koruma **doğrulama kodunun bu veritabanında tek olmasıdır**. İsim karşılaştırması Türkçe harfleri katlar (`Çağrı` ile `Cagri` aynı sayılır); `&` ile `and` de aynıdır.
 
 ### Ayarlar
 
@@ -177,7 +197,7 @@ Sicil No,Adı Soyadı,Pozisyon,Yetkinlik Merkezi,E-posta Adresi (İş)
 
 | Dosya | İçerik |
 | --- | --- |
-| `data/attendance.db` | Grup profili, kişiler, toplantılar, işaretler |
+| `data/attendance.db` | Grup profili, kişiler, toplantılar, işaretler, sertifikalar |
 | `seed/people.json` | İsteğe bağlı ilk yükleme listesi (gitignore) |
 
 Yedek almak için `data/attendance.db` kopyalaman yeter.
