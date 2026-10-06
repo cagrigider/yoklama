@@ -76,6 +76,7 @@ test.describe("settings and chrome", () => {
     await expect(wizardHeading(page)).toHaveCount(0);
     await expect(page.locator('[data-nav="settings"]')).toHaveText("Ayarlar");
     await expect(page.locator('[data-nav="people"]')).toHaveText("Kişiler");
+    await expect(page.locator('[data-nav="certificates"]')).toHaveText("Sertifikalar");
 
     await openNav(page, "settings");
     await expect(page.locator("#settings-import")).toBeVisible();
