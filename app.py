@@ -216,6 +216,10 @@ class AcademyUnreachable(Exception):
     """Claude Academy verify call failed (network, timeout, unexpected HTTP)."""
 
 
+class AcademyUnreachable(Exception):
+    """Claude Academy verify call failed (network, timeout, unexpected HTTP)."""
+
+
 def db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
