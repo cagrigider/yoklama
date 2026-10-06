@@ -768,6 +768,23 @@ a {
   font-size: 22px;
 }
 
+.cert-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.cert-link,
+.cert-issuer {
+  margin: 0;
+  font-size: 13px;
+}
+
+.cert-issuer {
+  color: var(--muted);
+}
+
 .validation-report {
   margin: 8px 0 0;
   padding: 12px 14px;

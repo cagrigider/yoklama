@@ -105,16 +105,17 @@ const PEOPLE_COPY = {
 
 const CERT_COPY = {
   title: "Sertifikalar",
-  sub: "Takip ettiğin kursları ekle. Kim aldığını Academy doğrulama bağlantısıyla kaydet.",
+  sub: "Takip ettiğin kursları ekle. Kim aldığını Claude Academy veya Skilljar doğrulama bağlantısıyla kaydet.",
   add: "Sertifika ekle",
   edit: "Düzenle",
   remove: "Sil",
   save: "Kaydet",
   cancel: "Vazgeç",
   name: "Sertifika adı",
-  nameHint: "Academy’deki kurs başlığıyla aynı yaz.",
+  nameHint: "Kurs başlığıyla aynı yaz (Academy veya Skilljar).",
   notes: "Not",
-  url: "Kurs bağlantısı",
+  url: "Bağlantı 1",
+  url2: "Bağlantı 2",
   empty: "Henüz sertifika yok. Takip etmek istediğin kursu ekle.",
   holders: "Aldı",
   missing: "Almadı",
@@ -131,16 +132,16 @@ const CERT_COPY = {
   addTitle: "Sertifika ekle",
   editTitle: "Sertifikayı düzenle",
   personAdd: "Sertifika ekle",
-  personHint: "Academy doğrulama bağlantısını veya 32 karakterlik kodu yapıştır.",
+  personHint: "Claude Academy veya Skilljar doğrulama bağlantısını yapıştır.",
   personUrl: "Doğrulama bağlantısı",
   personSave: "Kontrol et ve kaydet",
   personEmpty: "Henüz sertifika kaydı yok.",
-  issued: "Veriliş",
+  issued: "Alındı",
   forced: "Elle onaylandı",
   validationTitle: "Kayıt yapılmadı. Kontrol etmen gereken alanlar:",
   force: "Yine de kaydet",
   assigned: "Sertifika kaydedildi",
-  unreachable: "Claude Academy şu an kontrol edilemedi. Tekrar dene.",
+  unreachable: "Sertifika şu an kontrol edilemedi. Tekrar dene.",
   removeAssign: "Kaldır",
   back: "Sertifikalar",
 };
@@ -150,7 +151,7 @@ function certCountLabel(have, total) {
 }
 
 function certProblemText(problem) {
-  if (problem === "not exist") return "Academy’de bulunamadı";
+  if (problem === "not exist") return "doğrulama sayfasında bulunamadı";
   if (problem === "listede yok") return "takip listesinde yok";
   return problem;
 }
@@ -1162,20 +1163,57 @@ async function renderCertificates() {
 }
 
 function personMiniRow(p, extra = "") {
+  const meta = extra ? `<p class="meta">${extra}</p>` : "";
   return `
     <a class="meeting-card" href="#/people/${encodeURIComponent(p.id)}">
       <div>
         <p class="meeting-title">${escapeHtml(p.name)}</p>
-        <p class="meta">${escapeHtml(p.id)}${extra ? " · " + extra : ""}</p>
+        ${meta}
       </div>
     </a>`;
 }
 
+function certIssuerLine(record) {
+  const label = (record && record.issuerLabel) || "";
+  return label ? `<p class="meta cert-issuer">${escapeHtml(label)}</p>` : "";
+}
+
+function certLinkLines(cert) {
+  const items = [
+    [CERT_COPY.url, cert.url],
+    [CERT_COPY.url2, cert.url2],
+  ].filter(([, href]) => (href || "").trim());
+  if (!items.length) return "";
+  return `<div class="cert-links">${items
+    .map(
+      ([label, href]) =>
+        `<p class="cert-link">${escapeHtml(label)}: <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(href)}</a></p>`
+    )
+    .join("")}</div>`;
+}
+
 function formatIssued(iso) {
   if (!iso) return "";
-  const day = String(iso).slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return escapeHtml(iso);
-  return fmtDate(day);
+  const text = String(iso);
+  const day = text.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day) && text.length <= 10) return fmtDate(day);
+  const instant = Date.parse(text);
+  if (!Number.isNaN(instant)) {
+    return new Intl.DateTimeFormat("tr-TR", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(instant));
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return fmtDate(day);
+  return escapeHtml(text);
+}
+
+function certWhenLabel(record) {
+  const when = formatIssued(record.issuedAt || record.verifiedAt);
+  return when ? `${CERT_COPY.issued}: ${when}` : "";
 }
 
 async function renderCertificateDetail(id) {
@@ -1183,15 +1221,15 @@ async function renderCertificateDetail(id) {
   const holders = cert.holders || [];
   const missing = cert.missing || [];
   const notes = cert.notes ? `<p class="sub">${escapeHtml(cert.notes)}</p>` : "";
-  const urlLine = cert.url
-    ? `<p class="sub"><a class="link-quiet" href="${escapeHtml(cert.url)}" target="_blank" rel="noopener">${escapeHtml(cert.url)}</a></p>`
-    : "";
+  const urlLine = certLinkLines(cert);
   const holderRows = holders.length
     ? holders
         .map((p) => {
-          const issued = p.issuedAt ? formatIssued(p.issuedAt) : "";
-          const forced = p.forced ? ` · ${CERT_COPY.forced}` : "";
-          return personMiniRow(p, `${issued}${forced}`);
+          const when = certWhenLabel(p);
+          const issuer = (p.issuerLabel || "").trim();
+          const forced = p.forced ? CERT_COPY.forced : "";
+          const extra = [issuer, when, forced].filter(Boolean).join(" · ");
+          return personMiniRow(p, extra);
         })
         .join("")
     : `<p class="empty">${cert.peopleCount === 0 ? CERT_COPY.noPeople : CERT_COPY.holdersEmpty}</p>`;
@@ -1225,7 +1263,7 @@ async function renderCertificateDetail(id) {
 
 async function renderCertificateForm(editId) {
   const editing = Boolean(editId);
-  let cert = { name: "", notes: "", url: "" };
+  let cert = { name: "", notes: "", url: "", url2: "" };
   if (editing) {
     cert = await api(`/api/certificates/${editId}`);
   }
@@ -1244,6 +1282,7 @@ async function renderCertificateForm(editId) {
         <textarea id="cert-notes" name="notes" rows="3">${escapeHtml(cert.notes || "")}</textarea>
       </label>
       ${personFormField({ name: "url", label: CERT_COPY.url, value: cert.url || "" })}
+      ${personFormField({ name: "url2", label: CERT_COPY.url2, value: cert.url2 || "" })}
       <p class="form-error" id="cert-form-error" hidden></p>
       <div class="modal-actions">
         <a class="btn ghost" href="#/certificates">${CERT_COPY.cancel}</a>
@@ -1269,6 +1308,7 @@ async function renderCertificateForm(editId) {
       name,
       notes: (data.notes || "").trim(),
       url: (data.url || "").trim(),
+      url2: (data.url2 || "").trim(),
     };
     try {
       if (editing) {
@@ -1473,7 +1513,7 @@ async function renderPerson(id) {
   const certRows = certs.length
     ? certs
         .map((c) => {
-          const issued = c.issuedAt ? formatIssued(c.issuedAt) : "";
+          const when = certWhenLabel(c);
           const forced = c.forced
             ? `<span class="chip">${CERT_COPY.forced}</span>`
             : "";
@@ -1482,7 +1522,8 @@ async function renderPerson(id) {
           <a class="meeting-card-main" href="#/certificates/${c.certificateId}">
             <div>
               <p class="meeting-title">${escapeHtml(c.name)}</p>
-              <p class="meta">${issued ? CERT_COPY.issued + ": " + issued : escapeHtml(c.verifyCode)}</p>
+              ${certIssuerLine(c)}
+              <p class="meta">${when || escapeHtml(c.verifyCode)}</p>
             </div>
             ${forced}
           </a>
