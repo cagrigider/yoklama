@@ -72,5 +72,13 @@ test.describe("roster import UI", () => {
     expect((await getMeta(request)).configured).toBe(true);
     expect((await getMeta(request)).groupName).toBe(SYNTHETIC.group5);
     expect(await getPeople(request)).toEqual([]);
+
+    // Format dialog shows sample headers
+    await page.getByRole("button", { name: "Format" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog")).toContainText("Sicil No");
+    await expect(page.getByRole("dialog")).toContainText("Adı Soyadı");
+    await page.getByRole("button", { name: "Tamam" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 });

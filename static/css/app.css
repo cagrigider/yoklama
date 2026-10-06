@@ -278,6 +278,10 @@ a {
   box-shadow: 0 16px 40px rgba(26, 25, 22, 0.18);
 }
 
+.modal.modal-wide {
+  max-width: 560px;
+}
+
 .modal h3 {
   margin: 0 0 8px;
   font-size: 22px;
@@ -287,6 +291,35 @@ a {
   margin: 0 0 18px;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.modal.modal-wide p {
+  margin: 0 0 12px;
+}
+
+.import-sample {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #f7f4ef;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  color: var(--ink);
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.btn-compact {
+  padding: 4px 10px;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .meeting-card:hover {
@@ -733,6 +766,23 @@ a {
 .cert-person-block h3 {
   margin: 0;
   font-size: 22px;
+}
+
+.cert-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.cert-link,
+.cert-issuer {
+  margin: 0;
+  font-size: 13px;
+}
+
+.cert-issuer {
+  color: var(--muted);
 }
 
 .validation-report {

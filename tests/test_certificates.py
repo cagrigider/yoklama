@@ -24,7 +24,10 @@ from app import (
     list_certificates,
     names_match,
     normalize_match_text,
+    parse_skilljar_completion_date,
+    parse_skilljar_html,
     parse_verify_code,
+    parse_verify_ref,
     person_report,
     update_certificate,
 )
@@ -46,7 +49,17 @@ JORDAN = {
 }
 CODE_A = "547e3a740ac9226a1a1bcfebfaa13e8c"
 CODE_B = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+SKILLJAR_CODE = "arswnpvi6erm"
 COURSE = "Building with the Claude API"
+SKILLJAR_HTML = """
+<html><body>
+<p>Student</p><p>Cagri Gider</p>
+<p>Certificate Link</p><p>https://verify.skilljar.com/c/arswnpvi6erm</p>
+<p>Completion Date</p><p>Sept. 3, 2026</p>
+<p>Course Completed</p><p>Claude 101: A Guide to Building with the Claude API</p>
+<p>Offered By</p><p>Anthropic</p>
+</body></html>
+"""
 
 
 def badge(*, name: str = "Cagri Gider", title: str = COURSE, valid: bool = True) -> dict:
@@ -67,6 +80,40 @@ class NormalizeTest(IsolatedDbTestCase):
         self.assertEqual(parse_verify_code(CODE_A.upper()), CODE_A)
         self.assertIsNone(parse_verify_code("not-a-code"))
         self.assertIsNone(parse_verify_code(""))
+        self.assertIsNone(parse_verify_code(f"https://verify.skilljar.com/c/{SKILLJAR_CODE}"))
+
+    def test_parse_verify_ref_academy_and_skilljar(self) -> None:
+        self.assertEqual(
+            parse_verify_ref(f"https://academy.claude.com/verify/{CODE_A}"),
+            ("academy", CODE_A),
+        )
+        self.assertEqual(parse_verify_ref(CODE_A.upper()), ("academy", CODE_A))
+        self.assertEqual(
+            parse_verify_ref(f"https://verify.skilljar.com/c/{SKILLJAR_CODE.upper()}"),
+            ("skilljar", SKILLJAR_CODE),
+        )
+        self.assertIsNone(parse_verify_ref(SKILLJAR_CODE))
+        self.assertIsNone(parse_verify_ref("not-a-code"))
+
+    def test_ampersand_title_fold(self) -> None:
+        self.assertEqual(
+            normalize_match_text("Foo & Bar"),
+            normalize_match_text("Foo and Bar"),
+        )
+
+    def test_skilljar_html_and_date(self) -> None:
+        self.assertEqual(parse_skilljar_completion_date("Sept. 3, 2026"), "2026-09-03")
+        self.assertEqual(parse_skilljar_completion_date("May 1, 2026"), "2026-05-01")
+        badge = parse_skilljar_html(SKILLJAR_HTML)
+        self.assertTrue(badge["valid"])
+        self.assertEqual(badge["certificateName"], "Cagri Gider")
+        self.assertEqual(
+            badge["courseTitle"],
+            "Claude 101: A Guide to Building with the Claude API",
+        )
+        self.assertEqual(badge["issuedAt"], "2026-09-03")
+        self.assertEqual(badge["issuer"], "skilljar")
+        self.assertFalse(parse_skilljar_html("<p>nope</p>").get("valid"))
 
     def test_turkish_name_fold(self) -> None:
         self.assertEqual(normalize_match_text("Çağrı Gider"), "cagri gider")
@@ -123,8 +170,29 @@ class CatalogTest(IsolatedDbTestCase):
         )
         self.assertEqual(code, 200)
         self.assertEqual(updated["url"], "https://academy.claude.com/courses/claude-101")
+        self.assertEqual(updated["url2"], "")
         self.assertEqual(len(updated["missing"]), 2)
         self.assertEqual(updated["holders"], [])
+
+    def test_two_catalog_urls(self) -> None:
+        _, created = insert_certificate(
+            self.conn,
+            {
+                "name": "Claude 101",
+                "url": "https://academy.claude.com/courses/claude-101",
+                "url2": "https://anthropic.skilljar.com/claude-101",
+            },
+        )
+        self.assertEqual(created["url"], "https://academy.claude.com/courses/claude-101")
+        self.assertEqual(created["url2"], "https://anthropic.skilljar.com/claude-101")
+        code, updated = update_certificate(
+            self.conn,
+            created["id"],
+            {"name": "Claude 101", "url2": "https://verify.skilljar.com/c/example"},
+        )
+        self.assertEqual(code, 200)
+        self.assertEqual(updated["url"], "https://academy.claude.com/courses/claude-101")
+        self.assertEqual(updated["url2"], "https://verify.skilljar.com/c/example")
 
     def test_delete_catalog_cascades_assignments(self) -> None:
         insert_person(self.conn, ALEX)
@@ -162,13 +230,20 @@ class AssignTest(IsolatedDbTestCase):
         self.assertEqual(payload["verifyCode"], CODE_A)
         self.assertEqual(payload["name"], COURSE)
         self.assertFalse(payload["forced"])
+        self.assertEqual(payload["issuedAt"], "2026-09-15T07:20:32.950154Z")
+        self.assertTrue(payload["verifiedAt"])
+        self.assertEqual(payload["issuer"], "academy")
+        self.assertEqual(payload["issuerLabel"], "Claude Academy")
         listed = list_certificates(self.conn)
         self.assertEqual(listed[0]["haveCount"], 1)
         detail = get_certificate(self.conn, self.cid)
+        self.assertEqual(detail["holders"][0]["issuedAt"], "2026-09-15T07:20:32.950154Z")
+        self.assertTrue(detail["holders"][0]["verifiedAt"])
         self.assertEqual([h["id"] for h in detail["holders"]], ["90001"])
         self.assertEqual([m["id"] for m in detail["missing"]], ["90002"])
         report = person_report(self.conn, "90001")
         self.assertEqual(len(report["certificates"]), 1)
+        self.assertEqual(report["certificates"][0]["issuedAt"], "2026-09-15T07:20:32.950154Z")
 
     def test_malformed_code_no_fetch(self) -> None:
         called = {"n": 0}
@@ -287,3 +362,33 @@ class AssignTest(IsolatedDbTestCase):
         listed = list_certificates(self.conn)
         self.assertEqual(listed[0]["haveCount"], 0)
         self.assertEqual(listed[0]["peopleCount"], 1)
+
+
+class SkilljarAssignTest(IsolatedDbTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        insert_person(self.conn, ALEX)
+        insert_person(self.conn, JORDAN)
+        _, created = insert_certificate(self.conn, {"name": COURSE})
+        self.cid = created["id"]
+
+    def test_skilljar_url_stores_issuer(self) -> None:
+        url = f"https://verify.skilljar.com/c/{SKILLJAR_CODE}"
+        code, payload = add_person_certificate(
+            self.conn,
+            "90001",
+            {"url": url},
+            fetcher=lambda _code: {
+                **badge(),
+                "issuedAt": "2026-09-03",
+            },
+        )
+        self.assertEqual(code, 201)
+        self.assertEqual(payload["verifyCode"], SKILLJAR_CODE)
+        self.assertEqual(payload["issuer"], "skilljar")
+        self.assertEqual(payload["issuerLabel"], "Skilljar")
+        self.assertEqual(payload["issuedAt"], "2026-09-03")
+        detail = get_certificate(self.conn, self.cid)
+        self.assertEqual(detail["holders"][0]["issuerLabel"], "Skilljar")
+        report = person_report(self.conn, "90001")
+        self.assertEqual(report["certificates"][0]["issuerLabel"], "Skilljar")

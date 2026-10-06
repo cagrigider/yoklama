@@ -11,7 +11,7 @@ This project has no version file yet. Sprint work is recorded under `[Unreleased
 ### Added
 
 - Sertifikalar tab: champion-defined catalog, N/total completion counts, and have / have-not lists.
-- Person page “Sertifika ekle”: paste a Claude Academy verify link, live-check the badge, unique verify codes in this group’s SQLite, field-level mismatch report, and “Yine de kaydet” only for name or catalog-title mismatches.
+- Person page “Sertifika ekle”: paste a Claude Academy or Skilljar verify link, live-check the badge, unique verify codes in this group’s SQLite, field-level mismatch report, and “Yine de kaydet” only for name or catalog-title mismatches. Assignment cards show **Claude Academy** or **Skilljar**. Catalog create/detail supports two optional links (**Bağlantı 1**, **Bağlantı 2**), shown only when set.
 - Local-only Turkish attendance app on loopback (`127.0.0.1`): Python 3 stdlib HTTP, SQLite, and a hash-router SPA, shared without group roster data or `attendance.db`.
 - First-run wizard that saves a singleton group profile (name, first date, optional end date, repeat) and generates series meetings in one transaction.
 - Default group profile on startup when meetings already exist, so an operator database skips the wizard and is not wiped.
